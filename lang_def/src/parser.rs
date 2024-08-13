@@ -174,7 +174,7 @@ impl<
     }
 }
 
-pub trait Position: Default + Clone + MemSerializable<Self> {}
+pub trait Position: Default + Clone + PartialEq + Debug + MemSerializable<Self> + 'static {}
 
 pub trait Spanned {
     type Pos: Position;
@@ -243,7 +243,7 @@ impl<T, Pos: Position> Spanned for &WithSpan<T, Pos> {
     }
 }
 
-impl<T: Debug, Pos: Position + Debug> Debug for WithSpan<T, Pos> {
+impl<T: Debug, Pos: Position> Debug for WithSpan<T, Pos> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_fmt(format_args!("{:?} [{:?}]", self.inner, self.span))
     }
@@ -1207,37 +1207,30 @@ pub mod testing {
                         format!("unexpected non-ascii character `{ch}`"),
                     );
                 } else if ch.is_ascii_whitespace() {
-                    let start = ch.span();
-                    let mut end = start.clone();
+                    let mut span = ch.span();
                     let mut len: usize = 1;
                     while let Some(ch) = input.look_ahead() {
                         if !ch.is_ascii() || !ch.is_ascii_whitespace() {
                             break;
                         }
                         let ch = ch.consume();
-                        end = ch.span();
+                        span.end = ch.span().end;
                         len += 1;
                     }
                     if len > 1 {
-                        interface.warning(
-                            start..end,
-                            None,
-                            format!("excessive whitespace length {len}"),
-                        );
+                        interface.warning(span, None, format!("excessive whitespace length {len}"));
                     }
                 } else {
-                    let start = ch.span();
-                    let mut end = start.clone();
+                    let mut span = ch.span();
                     while let Some(ch) = input.look_ahead() {
                         if !ch.is_ascii() || ch.is_ascii_whitespace() {
                             break;
                         }
                         let ch = ch.consume();
-                        end = ch.span();
+                        span.end = ch.span().end;
                     }
-                    let token_span = start..end;
-                    let token = input.span_str(token_span.clone());
-                    interface.out_with_desc(token_span, token, SpanDesc::String);
+                    let token = input.span_str(span.clone());
+                    interface.out_with_desc(span, token, SpanDesc::String);
                 }
 
                 false
