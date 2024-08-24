@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     fmt::{self, Debug, Display},
+    iter::FusedIterator,
     ops::{Deref, Range},
 };
 
@@ -32,15 +33,51 @@ pub trait Parser<IF: ParserInterface>: MemSerializable<IF::Pos> {
     /// it may serialize the state (via [`MemSerializable`]) and later use it to construct a new
     /// parser.
     ///
-    /// Ideally, if [`ParserInterface::intermediate_state_wanted`] returns `true`, [`Parser::parse`]
-    /// should always process as much of the input as necessary to reach an efficiently serializable
-    /// state, and then return. However, a valid (but inefficient) alternative is to always consume
-    /// all input and not provide any state serialization.
+    /// Ideally, [`Parser::parse`] should always process as much of the input as necessary to reach
+    /// an efficiently serializable state, and then return. However, it is valid (but inefficient)
+    /// to always consume all input and not provide any state serialization.
     fn parse(&mut self, interface: &mut IF) -> bool;
 }
 
+/// A user-implemented trait that provides a character-based parser given a matching parser
+/// interface.
+pub trait CharParserDesc {
+    type Config<'a>;
+    type Out<'a, Pos: Position>: MemSerializable<Pos>;
+
+    type Parser<
+        'a,
+        Pos: Position,
+        IF: ParserInterface<
+            Config = Self::Config<'a>,
+            In = char,
+            Out = Self::Out<'a, Pos>,
+            Pos = Pos,
+            Input: CharParserInput<'a>,
+        >
+    >: Parser<IF>;
+
+    fn parser<
+        'a,
+        Pos: Position,
+        IF: ParserInterface<
+            Config = Self::Config<'a>,
+            In = char,
+            Out = Self::Out<'a, Pos>,
+            Pos = Pos,
+            Input: CharParserInput<'a>,
+        >,
+    >(
+        interface: &IF,
+    ) -> Self::Parser<'a, Pos, IF>;
+}
+
 pub trait ParserInterfaceBase {
+    type Config;
     type Pos: Position;
+
+    fn config(&self) -> &Self::Config;
+    fn modify_config<R>(&mut self, f: impl FnOnce(&mut Self::Config) -> R) -> R;
 }
 
 pub trait ParserInputInterface: ParserInterfaceBase {
@@ -94,8 +131,6 @@ pub trait ParserOutputInterface: ParserInterfaceBase {
 }
 
 pub trait ParserInterface: ParserInputInterface + ParserOutputInterface {
-    fn intermediate_state_wanted(&self) -> bool;
-
     fn out_with_desc(
         &mut self,
         span: impl Spanned<Pos = Self::Pos>,
@@ -108,17 +143,26 @@ pub trait ParserInterface: ParserInputInterface + ParserOutputInterface {
     }
 }
 
-pub struct StandardParserInterface<Input, Output, Diag> {
+pub struct StandardParserInterface<Input, Output, Diag, Config> {
     pub input: Input,
     pub output: Output,
     pub diag: Diag,
-    pub intermediate_state_wanted: bool,
+    pub config: Config,
 }
 
-impl<Pos: Position, Input, Output, Diag: ParserDiagnostics<Pos = Pos>> ParserInterfaceBase
-    for StandardParserInterface<Input, Output, Diag>
+impl<Pos: Position, Input, Output, Diag: ParserDiagnostics<Pos = Pos>, Config> ParserInterfaceBase
+    for StandardParserInterface<Input, Output, Diag, Config>
 {
+    type Config = Config;
     type Pos = Pos;
+
+    fn config(&self) -> &Self::Config {
+        &self.config
+    }
+
+    fn modify_config<R>(&mut self, f: impl FnOnce(&mut Self::Config) -> R) -> R {
+        f(&mut self.config)
+    }
 }
 
 impl<
@@ -127,7 +171,8 @@ impl<
         Input: ParserInput<In = In, Pos = Pos>,
         Output,
         Diag: ParserDiagnostics<Pos = Pos>,
-    > ParserInputInterface for StandardParserInterface<Input, Output, Diag>
+        Config,
+    > ParserInputInterface for StandardParserInterface<Input, Output, Diag, Config>
 {
     type In = In;
 
@@ -149,7 +194,8 @@ impl<
         Input,
         Output: ParserOutput<Out = Out, Pos = Pos>,
         Diag: ParserDiagnostics<Pos = Pos>,
-    > ParserOutputInterface for StandardParserInterface<Input, Output, Diag>
+        Config,
+    > ParserOutputInterface for StandardParserInterface<Input, Output, Diag, Config>
 {
     type Out = Out;
 
@@ -167,14 +213,12 @@ impl<
         Input: ParserInput<In = In, Pos = Pos>,
         Output: ParserOutput<Out = Out, Pos = Pos>,
         Diag: ParserDiagnostics<Pos = Pos>,
-    > ParserInterface for StandardParserInterface<Input, Output, Diag>
+        Config,
+    > ParserInterface for StandardParserInterface<Input, Output, Diag, Config>
 {
-    fn intermediate_state_wanted(&self) -> bool {
-        self.intermediate_state_wanted
-    }
 }
 
-pub trait Position: Default + Clone + PartialEq + Debug + MemSerializable<Self> + 'static {}
+pub trait Position: Clone + PartialEq + Debug + MemSerializable<Self> + 'static {}
 
 pub trait Spanned {
     type Pos: Position;
@@ -274,16 +318,22 @@ impl<T: MemSerializable<Pos>, Pos: Position> MemSerializable<Pos> for WithSpan<T
 }
 
 pub trait ParserInput:
-    Iterator<Item = WithSpan<Self::In, Self::Pos>>
+    FusedIterator<Item = WithSpan<Self::In, Self::Pos>>
     + LookAhead<LookAheadItem = Self::In, ConsumedItem = Self::Item, NextConsumedItems = Self::Item>
 {
     type In;
     type Pos: Position;
+
+    fn pos(&mut self) -> Self::Pos;
 }
 
 pub trait CharParserInput<'a>: ParserInput<In = char> {
     /// Returns a string slice of the given range that was previously iterated over, either owned or
     /// borrowed with a lifetime that ensures it can be stored within the parser.
+    ///
+    /// # Panics
+    /// May panic if the given span starts before the input position at the beginning of the current
+    /// call to [`Parser::parse`].
     fn span_str(&self, span: impl Spanned<Pos = Self::Pos>) -> Cow<'a, str>;
 }
 
@@ -303,6 +353,26 @@ pub trait LookAhead {
         Self: 'l;
 
     fn look_ahead(&mut self) -> Option<Self::LookAhead<'_>>;
+
+    fn next_if(
+        &mut self,
+        pred: impl FnOnce(&Self::LookAheadItem) -> bool,
+    ) -> Option<Self::NextConsumedItems> {
+        let item = self.look_ahead()?;
+        if pred(&*item) {
+            Some(item.consume())
+        } else {
+            None
+        }
+    }
+
+    fn check_next(&mut self, pred: impl FnOnce(&Self::LookAheadItem) -> bool) -> bool {
+        if let Some(item) = self.look_ahead() {
+            pred(&*item)
+        } else {
+            false
+        }
+    }
 }
 
 pub trait Consumable {
@@ -351,7 +421,7 @@ pub enum DiagnosticSeverity {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ErrorKind {
     ParseError,
-    FileNotFound,
+    ResourceNotFound,
     IdentifierNotFound,
     TypeMismatch,
 }
@@ -380,11 +450,12 @@ impl<Pos: Position> DiagnosticMessage<Pos> {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SpanDesc {
+    ParenStart, // Must always be matched by `ParenEnd` later.
+    ParenEnd,
     Comment,
     Keyword,
     Number,
     String,
-    Paren,
     ParamNotation(ParamScopeDesc),
     ParamRef(ParamScopeDesc),
 }
@@ -499,7 +570,7 @@ pub mod helpers {
 }
 
 pub mod buffer {
-    use std::{collections::VecDeque, iter::FusedIterator, mem::take};
+    use std::{collections::VecDeque, mem::take};
 
     use crate::util::TempRefPair;
 
@@ -539,11 +610,26 @@ pub mod buffer {
     pub type BufferedParserInterface<IF, Out> =
         TempRefPair<IF, ParserOutputBuffer<Out, <IF as ParserInterfaceBase>::Pos>>;
 
-    impl<IF: ParserInterfaceBase, Out> ParserInterfaceBase for BufferedParserInterface<IF, Out> {
+    impl<Config1, Config2: 'static, IF: ParserInterfaceBase<Config = (Config1, Config2)>, Out>
+        ParserInterfaceBase for BufferedParserInterface<IF, Out>
+    {
         type Pos = IF::Pos;
+        type Config = Config1;
+
+        fn config(&self) -> &Self::Config {
+            &self.get_refs().0.config().0
+        }
+
+        fn modify_config<R>(&mut self, f: impl FnOnce(&mut Self::Config) -> R) -> R {
+            self.get_refs_mut()
+                .0
+                .modify_config(|(config1, _)| f(config1))
+        }
     }
 
-    impl<IF: ParserInputInterface, Out> ParserInputInterface for BufferedParserInterface<IF, Out> {
+    impl<Config1, Config2: 'static, IF: ParserInputInterface<Config = (Config1, Config2)>, Out>
+        ParserInputInterface for BufferedParserInterface<IF, Out>
+    {
         type In = IF::In;
 
         type Input = IF::Input;
@@ -558,7 +644,9 @@ pub mod buffer {
         }
     }
 
-    impl<IF: ParserInterfaceBase, Out> ParserOutputInterface for BufferedParserInterface<IF, Out> {
+    impl<Config1, Config2: 'static, IF: ParserInterfaceBase<Config = (Config1, Config2)>, Out>
+        ParserOutputInterface for BufferedParserInterface<IF, Out>
+    {
         type Out = Out;
 
         type Output = ParserOutputBuffer<Out, IF::Pos>;
@@ -568,12 +656,9 @@ pub mod buffer {
         }
     }
 
-    impl<IF: ParserInputInterface, Out> ParserInterface for BufferedParserInterface<IF, Out> {
-        fn intermediate_state_wanted(&self) -> bool {
-            // Although we do not necessarily want to serialize the state, we would like `parse` to
-            // return after every output, so we don't have to grow our buffer.
-            true
-        }
+    impl<Config1, Config2: 'static, IF: ParserInputInterface<Config = (Config1, Config2)>, Out>
+        ParserInterface for BufferedParserInterface<IF, Out>
+    {
     }
 
     pub struct BufferedParser<Out, Pos: Position, P> {
@@ -624,8 +709,40 @@ pub mod buffer {
     pub type ParserOutputIter<IF, Out, P> =
         TempRefPair<IF, BufferedParser<Out, <IF as ParserInterfaceBase>::Pos, P>>;
 
-    impl<IF: ParserInputInterface, Out, P: Parser<BufferedParserInterface<IF, Out>>> Iterator
-        for ParserOutputIter<IF, Out, P>
+    impl<
+            Config1,
+            Config2: 'static,
+            IF: ParserInputInterface<Config = (Config1, Config2)>,
+            Out,
+            P: Parser<BufferedParserInterface<IF, Out>>,
+        > ParserOutputIter<IF, Out, P>
+    {
+        pub(crate) fn finish(&mut self) {
+            let (interface, bp) = self.get_refs_mut();
+            bp.buffer.0.clear();
+            if let Some(parser) = &mut bp.parser {
+                BufferedParserInterface::with_temp_ref_pair(
+                    interface,
+                    &mut bp.buffer,
+                    |parser_interface| {
+                        while !parser.parse(parser_interface) {
+                            let buffer = parser_interface.get_refs_mut().1;
+                            buffer.0.clear();
+                        }
+                    },
+                );
+                bp.parser = None;
+            }
+        }
+    }
+
+    impl<
+            Config1,
+            Config2: 'static,
+            IF: ParserInputInterface<Config = (Config1, Config2)>,
+            Out,
+            P: Parser<BufferedParserInterface<IF, Out>>,
+        > Iterator for ParserOutputIter<IF, Out, P>
     {
         type Item = WithSpan<Out, IF::Pos>;
 
@@ -650,13 +767,23 @@ pub mod buffer {
         }
     }
 
-    impl<IF: ParserInputInterface, Out, P: Parser<BufferedParserInterface<IF, Out>>> FusedIterator
-        for ParserOutputIter<IF, Out, P>
+    impl<
+            Config1,
+            Config2: 'static,
+            IF: ParserInputInterface<Config = (Config1, Config2)>,
+            Out,
+            P: Parser<BufferedParserInterface<IF, Out>>,
+        > FusedIterator for ParserOutputIter<IF, Out, P>
     {
     }
 
-    impl<IF: ParserInputInterface, Out, P: Parser<BufferedParserInterface<IF, Out>>> LookAhead
-        for ParserOutputIter<IF, Out, P>
+    impl<
+            Config1,
+            Config2: 'static,
+            IF: ParserInputInterface<Config = (Config1, Config2)>,
+            Out,
+            P: Parser<BufferedParserInterface<IF, Out>>,
+        > LookAhead for ParserOutputIter<IF, Out, P>
     {
         type LookAheadItem = Out;
         type ConsumedItem = WithSpan<Out, IF::Pos>;
@@ -671,11 +798,25 @@ pub mod buffer {
         }
     }
 
-    impl<IF: ParserInputInterface, Out, P: Parser<BufferedParserInterface<IF, Out>>> ParserInput
-        for ParserOutputIter<IF, Out, P>
+    impl<
+            Config1,
+            Config2: 'static,
+            IF: ParserInputInterface<Config = (Config1, Config2)>,
+            Out,
+            P: Parser<BufferedParserInterface<IF, Out>>,
+        > ParserInput for ParserOutputIter<IF, Out, P>
     {
         type In = Out;
         type Pos = IF::Pos;
+
+        fn pos(&mut self) -> Self::Pos {
+            let (interface, bp) = self.get_refs_mut();
+            if let Some(item) = bp.buffer.0.front() {
+                item.span.start.clone()
+            } else {
+                interface.input().pos()
+            }
+        }
     }
 
     pub trait LookAheadParent {
@@ -691,8 +832,13 @@ pub mod buffer {
         ) -> Self::NextConsumedItems;
     }
 
-    impl<IF: ParserInputInterface, Out, P: Parser<BufferedParserInterface<IF, Out>>> LookAheadParent
-        for ParserOutputIter<IF, Out, P>
+    impl<
+            Config1,
+            Config2: 'static,
+            IF: ParserInputInterface<Config = (Config1, Config2)>,
+            Out,
+            P: Parser<BufferedParserInterface<IF, Out>>,
+        > LookAheadParent for ParserOutputIter<IF, Out, P>
     {
         type In = Out;
         type Pos = IF::Pos;
@@ -799,12 +945,28 @@ pub mod compose {
 
     use super::{buffer::*, *};
 
-    impl<IF: ParserInterfaceBase, Mid, P1> ParserInterfaceBase for ParserOutputIter<IF, Mid, P1> {
+    impl<Config1, Config2, IF: ParserInterfaceBase<Config = (Config1, Config2)>, Mid, P1>
+        ParserInterfaceBase for ParserOutputIter<IF, Mid, P1>
+    {
         type Pos = IF::Pos;
+        type Config = (Config1, Config2);
+
+        fn config(&self) -> &Self::Config {
+            self.get_refs().0.config()
+        }
+
+        fn modify_config<R>(&mut self, f: impl FnOnce(&mut Self::Config) -> R) -> R {
+            self.get_refs_mut().0.modify_config(f)
+        }
     }
 
-    impl<IF: ParserInputInterface, Mid, P1: Parser<BufferedParserInterface<IF, Mid>>>
-        ParserInputInterface for ParserOutputIter<IF, Mid, P1>
+    impl<
+            Config1,
+            Config2: 'static,
+            IF: ParserInputInterface<Config = (Config1, Config2)>,
+            Mid,
+            P1: Parser<BufferedParserInterface<IF, Mid>>,
+        > ParserInputInterface for ParserOutputIter<IF, Mid, P1>
     {
         type In = Mid;
 
@@ -820,7 +982,9 @@ pub mod compose {
         }
     }
 
-    impl<IF: ParserInterface, Mid, P1> ParserOutputInterface for ParserOutputIter<IF, Mid, P1> {
+    impl<Config1, Config2, IF: ParserInterface<Config = (Config1, Config2)>, Mid, P1>
+        ParserOutputInterface for ParserOutputIter<IF, Mid, P1>
+    {
         type Out = IF::Out;
 
         type Output = IF::Output;
@@ -830,12 +994,14 @@ pub mod compose {
         }
     }
 
-    impl<IF: ParserInterface, Mid, P1: Parser<BufferedParserInterface<IF, Mid>>> ParserInterface
-        for ParserOutputIter<IF, Mid, P1>
+    impl<
+            Config1,
+            Config2: 'static,
+            IF: ParserInterface<Config = (Config1, Config2)>,
+            Mid,
+            P1: Parser<BufferedParserInterface<IF, Mid>>,
+        > ParserInterface for ParserOutputIter<IF, Mid, P1>
     {
-        fn intermediate_state_wanted(&self) -> bool {
-            self.get_refs().0.intermediate_state_wanted()
-        }
     }
 
     pub struct ComposedParser<IF: ParserInterfaceBase, Mid, P1, P2> {
@@ -844,7 +1010,9 @@ pub mod compose {
     }
 
     impl<
-            IF: ParserInterface,
+            Config1,
+            Config2: 'static,
+            IF: ParserInterface<Config = (Config1, Config2)>,
             Mid: MemSerializable<IF::Pos>,
             P1: Parser<BufferedParserInterface<IF, Mid>>,
             P2: Parser<ParserOutputIter<IF, Mid, P1>>,
@@ -859,7 +1027,9 @@ pub mod compose {
     }
 
     impl<
-            IF: ParserInterface,
+            Config1,
+            Config2: 'static,
+            IF: ParserInterface<Config = (Config1, Config2)>,
             Mid: MemSerializable<IF::Pos>,
             P1: Parser<BufferedParserInterface<IF, Mid>>,
             P2: Parser<ParserOutputIter<IF, Mid, P1>>,
@@ -886,27 +1056,36 @@ pub mod compose {
     }
 
     impl<
-            IF: ParserInterface,
+            Config1,
+            Config2: 'static,
+            IF: ParserInterface<Config = (Config1, Config2)>,
             Mid: MemSerializable<IF::Pos>,
             P1: Parser<BufferedParserInterface<IF, Mid>>,
             P2: Parser<ParserOutputIter<IF, Mid, P1>>,
         > Parser<IF> for ComposedParser<IF, Mid, P1, P2>
     {
         fn parse(&mut self, interface: &mut IF) -> bool {
-            self.p1
-                .iterate(interface, |p2_interface| self.p2.parse(p2_interface))
+            self.p1.iterate(interface, |p2_interface| {
+                let result = self.p2.parse(p2_interface);
+                if result {
+                    // If the second parser finishes early, make sure that the first parser is run
+                    // to completion nevertheless, so that we don't lose any diagnostics.
+                    p2_interface.finish();
+                }
+                result
+            })
         }
     }
 }
 
 pub mod str {
-    use std::{iter::FusedIterator, str::Chars};
+    use std::str::Chars;
 
     use nonminmax::NonMaxUsize;
 
     use super::{helpers::*, *};
 
-    #[derive(Clone, Copy, PartialEq)]
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
     pub struct StrPosition(NonMaxUsize);
 
     impl StrPosition {
@@ -932,12 +1111,6 @@ pub mod str {
 
         pub fn span_to_range(span: Range<Self>) -> Range<usize> {
             span.start.to_usize()..span.end.to_usize()
-        }
-    }
-
-    impl Default for StrPosition {
-        fn default() -> Self {
-            Self::from_usize(0)
         }
     }
 
@@ -1000,6 +1173,10 @@ pub mod str {
         pub fn pos(&self) -> usize {
             self.pos
         }
+
+        pub fn pos_as_str_position(&self) -> StrPosition {
+            StrPosition::from_usize(self.pos)
+        }
     }
 
     pub struct StrInput<'a> {
@@ -1026,7 +1203,7 @@ pub mod str {
             }
         }
 
-        pub fn pos(&self) -> usize {
+        pub fn iter_pos(&self) -> usize {
             self.iter.pos()
         }
 
@@ -1094,6 +1271,10 @@ pub mod str {
     impl<'a> ParserInput for StrInput<'a> {
         type In = char;
         type Pos = StrPosition;
+
+        fn pos(&mut self) -> Self::Pos {
+            self.iter.pos_as_str_position()
+        }
     }
 
     impl<'a> CharParserInput<'a> for StrInput<'a> {
@@ -1153,16 +1334,38 @@ pub mod testing {
     }
 
     pub mod str {
-        use super::{
-            super::{str::*, *},
-            *,
-        };
+        use super::{super::str::*, *};
 
-        pub type TestParserInterface<'a, Out> = StandardParserInterface<
+        pub type TestParserInterface<'a, Out, Config> = StandardParserInterface<
             StrInput<'a>,
             TestOutput<Out, StrPosition>,
             TestDiagnostics<StrPosition>,
+            Config,
         >;
+
+        impl<'a, Out, Config> TestParserInterface<'a, Out, Config> {
+            pub fn new(input: &'a str, config: Config) -> Self {
+                TestParserInterface {
+                    input: StrInput::new(input),
+                    output: TestOutput::new(),
+                    diag: TestDiagnostics::new(),
+                    config,
+                }
+            }
+        }
+
+        pub fn parse_all<'a, Desc: CharParserDesc>(
+            input: &'a str,
+            config: Desc::Config<'a>,
+        ) -> (
+            TestOutput<Desc::Out<'a, StrPosition>, StrPosition>,
+            TestDiagnostics<StrPosition>,
+        ) {
+            let mut interface = TestParserInterface::new(input, config);
+            let mut parser = Desc::parser(&interface);
+            while !parser.parse(&mut interface) {}
+            (interface.output, interface.diag)
+        }
     }
 
     /// Some simple example parsers for testing and demonstration purposes.
@@ -1171,7 +1374,7 @@ pub mod testing {
 
         use crate::mem_serializable::impl_mem_serializable_self;
 
-        use super::*;
+        use super::{compose::*, *};
 
         pub type Token<'a> = Cow<'a, str>;
 
@@ -1237,6 +1440,41 @@ pub mod testing {
             }
         }
 
+        pub struct TokenizerConfig;
+
+        impl CharParserDesc for TokenizerConfig {
+            type Out<'a, Pos: Position> = Token<'a>;
+            type Config<'a> = Self;
+
+            type Parser<
+                'a,
+                Pos: Position,
+                IF: ParserInterface<
+                    Config = Self::Config<'a>,
+                    In = char,
+                    Out = Self::Out<'a, Pos>,
+                    Pos = Pos,
+                    Input: CharParserInput<'a>,
+                >,
+            > = Tokenizer;
+
+            fn parser<
+                'a,
+                Pos: Position,
+                IF: ParserInterface<
+                    Config = Self::Config<'a>,
+                    In = char,
+                    Out = Self::Out<'a, Pos>,
+                    Pos = Pos,
+                    Input: CharParserInput<'a>,
+                >,
+            >(
+                _interface: &IF,
+            ) -> Self::Parser<'a, Pos, IF> {
+                Tokenizer::new()
+            }
+        }
+
         /// A parser that takes arbitrary input events (e.g. tokens) and outputs all pairs of
         /// consecutive inputs (i.e. with overlap).
         /// If no tokens are present, an info is reported.
@@ -1275,7 +1513,8 @@ pub mod testing {
             fn parse(&mut self, interface: &mut IF) -> bool {
                 let Some(token) = interface.input().next() else {
                     if self.prev_token.is_none() {
-                        interface.info(Pos::default(), "no tokens present".into());
+                        let pos = interface.input().pos();
+                        interface.info(pos, "no tokens present".into());
                     }
                     return true;
                 };
@@ -1284,6 +1523,41 @@ pub mod testing {
                     interface.out(span.span(), (prev_token.into_inner(), token.into_inner()));
                 }
                 false
+            }
+        }
+
+        pub struct PairMakerConfig;
+
+        impl CharParserDesc for PairMakerConfig {
+            type Out<'a, Pos: Position> = (Token<'a>, Token<'a>);
+            type Config<'a> = (TokenizerConfig, Self);
+
+            type Parser<
+                'a,
+                Pos: Position,
+                IF: ParserInterface<
+                    Config = Self::Config<'a>,
+                    In = char,
+                    Out = Self::Out<'a, Pos>,
+                    Pos = Pos,
+                    Input: CharParserInput<'a>,
+                >,
+            > = ComposedParser<IF, Token<'a>, Tokenizer, PairMaker<Token<'a>, Pos>>;
+
+            fn parser<
+                'a,
+                Pos: Position,
+                IF: ParserInterface<
+                    Config = Self::Config<'a>,
+                    In = char,
+                    Out = Self::Out<'a, Pos>,
+                    Pos = Pos,
+                    Input: CharParserInput<'a>,
+                >,
+            >(
+                _interface: &IF,
+            ) -> Self::Parser<'a, Pos, IF> {
+                ComposedParser::new(Tokenizer::new(), PairMaker::new())
             }
         }
 
@@ -1331,6 +1605,41 @@ pub mod testing {
                 false
             }
         }
+
+        pub struct PeakFinderConfig;
+
+        impl CharParserDesc for PeakFinderConfig {
+            type Out<'a, Pos: Position> = Token<'a>;
+            type Config<'a> = (TokenizerConfig, Self);
+
+            type Parser<
+                'a,
+                Pos: Position,
+                IF: ParserInterface<
+                    Config = Self::Config<'a>,
+                    In = char,
+                    Out = Self::Out<'a, Pos>,
+                    Pos = Pos,
+                    Input: CharParserInput<'a>,
+                >,
+            > = ComposedParser<IF, Token<'a>, Tokenizer, PeakFinder>;
+
+            fn parser<
+                'a,
+                Pos: Position,
+                IF: ParserInterface<
+                    Config = Self::Config<'a>,
+                    In = char,
+                    Out = Self::Out<'a, Pos>,
+                    Pos = Pos,
+                    Input: CharParserInput<'a>,
+                >,
+            >(
+                _interface: &IF,
+            ) -> Self::Parser<'a, Pos, IF> {
+                ComposedParser::new(Tokenizer::new(), PeakFinder::new())
+            }
+        }
     }
 }
 
@@ -1338,30 +1647,15 @@ pub mod testing {
 mod tests {
     use super::{
         buffer::*,
-        compose::*,
         str::*,
         testing::{str::*, test_parsers::*, TestDiagnostics, TestOutput},
         *,
     };
 
-    fn parse_all<'a, Out, P: Parser<TestParserInterface<'a, Out>>>(
-        mut parser: P,
-        input: &'a str,
-    ) -> (TestOutput<Out, StrPosition>, TestDiagnostics<StrPosition>) {
-        let mut interface = TestParserInterface {
-            input: StrInput::new(input),
-            output: TestOutput::new(),
-            diag: TestDiagnostics::new(),
-            intermediate_state_wanted: false,
-        };
-        while !parser.parse(&mut interface) {}
-        (interface.output, interface.diag)
-    }
-
     #[test]
     fn can_collect_tokens() {
         let input = "abc de  fghi j  kl";
-        let (output, diag) = parse_all(Tokenizer::new(), input);
+        let (output, diag) = parse_all::<TokenizerConfig>(input, TokenizerConfig);
         assert_eq!(
             output.output,
             [
@@ -1415,7 +1709,7 @@ mod tests {
             input: StrInput::new("abc de  fghi j  kl"),
             output: (),
             diag: TestDiagnostics::new(),
-            intermediate_state_wanted: false,
+            config: ((), ()),
         };
         let mut tokenizer = BufferedParser::new(Tokenizer::new());
         let tokens: Vec<WithSpan<Token, StrPosition>> =
@@ -1473,7 +1767,7 @@ mod tests {
             input: StrInput::new("abc de  fghi j  kl"),
             output: (),
             diag: TestDiagnostics::new(),
-            intermediate_state_wanted: false,
+            config: ((), ()),
         };
         let mut tokenizer = BufferedParser::new(Tokenizer::new());
 
@@ -1570,8 +1864,8 @@ mod tests {
     #[test]
     fn can_collect_token_pairs() {
         let input = "abc de  fghi j  kl";
-        let parser = ComposedParser::new(Tokenizer::new(), PairMaker::new());
-        let (output, diag) = parse_all(parser, input);
+        let (output, diag) =
+            parse_all::<PairMakerConfig>(input, (TokenizerConfig, PairMakerConfig));
         assert_eq!(
             output.output,
             [
@@ -1633,8 +1927,8 @@ mod tests {
     #[test]
     fn can_combine_diagnostics_for_token_pairs() {
         let input = "   ";
-        let parser = ComposedParser::new(Tokenizer::new(), PairMaker::new());
-        let (output, diag) = parse_all(parser, input);
+        let (output, diag) =
+            parse_all::<PairMakerConfig>(input, (TokenizerConfig, PairMakerConfig));
         assert_eq!(output.output, []);
         assert_eq!(
             diag.diag,
@@ -1657,7 +1951,7 @@ mod tests {
                             hints: Vec::new()
                         }
                     },
-                    StrPosition::span_from_range(0..0)
+                    StrPosition::span_from_range(3..3)
                 ),
             ]
         );
@@ -1744,29 +2038,25 @@ mod tests {
 
     // This function can be regarded as a blueprint for state handling within an LSP server (which
     // should be based on a text rope instead of a contiguous string).
-    fn parse_all_with_state<
-        'a,
-        Out: MemSerializable<StrPosition>,
-        P: Parser<TestParserInterface<'a, Out>>,
-    >(
-        mut create_parser: impl FnMut() -> P,
+    fn parse_all_with_state<'a, Desc: CharParserDesc>(
         input: &'a str,
+        config: Desc::Config<'a>,
         cache: &mut ParserCache<
-            P::Serialized,
-            <WithSpan<Out, StrPosition> as MemSerializable<StrPosition>>::Serialized,
+            <Desc::Parser<
+                'a,
+                StrPosition,
+                TestParserInterface<'a, Desc::Out<'a, StrPosition>, Desc::Config<'a>>,
+            > as MemSerializable<StrPosition>>::Serialized,
+            <WithSpan<Desc::Out<'a, StrPosition>, StrPosition> as MemSerializable<StrPosition>>::Serialized,
         >,
     ) -> (
-        TestOutput<Out, StrPosition>,
+        TestOutput<Desc::Out<'a, StrPosition>, StrPosition>,
         TestDiagnostics<StrPosition>,
         usize,
     ) {
-        let mut interface = TestParserInterface {
-            input: StrInput::new(input),
-            output: TestOutput::new(),
-            // TODO: Diagnostics need to be treated equivalently to output.
-            diag: TestDiagnostics::new(),
-            intermediate_state_wanted: true,
-        };
+        // TODO: A real implementation will need to remember which spans called `modify_config`.
+        // TODO: Diagnostics need to be treated equivalently to output.
+        let mut interface = TestParserInterface::new(input, config);
         let mut steps = 0;
 
         let mut cur_pos = 0;
@@ -1806,16 +2096,20 @@ mod tests {
             }
 
             let lookahead_len: usize;
-            let mut parser: P;
+            let mut parser: Desc::Parser<
+                'a,
+                StrPosition,
+                TestParserInterface<'a, Desc::Out<'a, StrPosition>, Desc::Config<'a>>,
+            >;
             if span_idx > 0 {
                 let span = &cache[span_idx - 1];
                 lookahead_len = span.lookahead_len;
-                parser = P::deserialize(
+                parser = <_>::deserialize(
                     span.end_state.as_ref().unwrap(),
                     &StrPosition::from_usize(cur_pos),
                 );
             } else {
-                parser = create_parser();
+                parser = Desc::parser(&interface);
                 lookahead_len = 0;
             }
             interface.input = StrInput::with_start_pos(input, cur_pos - lookahead_len, cur_pos);
@@ -1830,7 +2124,7 @@ mod tests {
                 let relative_to = StrPosition::from_usize(pos);
                 let new_span = ParserCacheSpan {
                     len,
-                    lookahead_len: pos - interface.input.pos(),
+                    lookahead_len: pos - interface.input.iter_pos(),
                     end_state: Some(parser.serialize(&relative_to)),
                     output: Some(
                         new_output
@@ -1899,27 +2193,27 @@ mod tests {
     fn can_reuse_intermediate_state() {
         let mut input = StringWithParserCache::new("abc de  fghi j  kl");
 
-        let (output1, _, steps1) = parse_all_with_state(
-            || ComposedParser::new(Tokenizer::new(), PairMaker::new()),
+        let (output1, _, steps1) = parse_all_with_state::<PairMakerConfig>(
             &input.s,
+            (TokenizerConfig, PairMakerConfig),
             &mut input.cache,
         );
         assert!(!output1.output.is_empty());
         assert_eq!(steps1, 6);
         assert!(!input.cache.is_empty());
 
-        let (output2, _, steps2) = parse_all_with_state(
-            || ComposedParser::new(Tokenizer::new(), PairMaker::new()),
+        let (output2, _, steps2) = parse_all_with_state::<PairMakerConfig>(
             &input.s,
+            (TokenizerConfig, PairMakerConfig),
             &mut input.cache,
         );
         assert_eq!(output2, output1);
         assert_eq!(steps2, 0);
 
         input.insert_str(0, " xy z");
-        let (output3, _, steps3) = parse_all_with_state(
-            || ComposedParser::new(Tokenizer::new(), PairMaker::new()),
+        let (output3, _, steps3) = parse_all_with_state::<PairMakerConfig>(
             &input.s,
+            (TokenizerConfig, PairMakerConfig),
             &mut input.cache,
         );
         assert_eq!(
@@ -1950,9 +2244,9 @@ mod tests {
         assert_eq!(steps3, 3);
 
         input.replace_range(14..20, " mn o");
-        let (output4, _, steps4) = parse_all_with_state(
-            || ComposedParser::new(Tokenizer::new(), PairMaker::new()),
+        let (output4, _, steps4) = parse_all_with_state::<PairMakerConfig>(
             &input.s,
+            (TokenizerConfig, PairMakerConfig),
             &mut input.cache,
         );
         assert_eq!(
@@ -1990,8 +2284,7 @@ mod tests {
     #[test]
     fn can_collect_peaks_with_lookahead() {
         let input = "abc de  f ghi j  kl";
-        let parser = ComposedParser::new(Tokenizer::new(), PeakFinder::new());
-        let (output, _) = parse_all(parser, input);
+        let (output, _) = parse_all::<PeakFinderConfig>(input, (TokenizerConfig, PeakFinderConfig));
         assert_eq!(
             output.output,
             [
@@ -2006,18 +2299,18 @@ mod tests {
     fn can_reuse_intermediate_state_with_lookahead() {
         let mut input = StringWithParserCache::new("abc de  f ghi j  kl");
 
-        let (output1, _, steps1) = parse_all_with_state(
-            || ComposedParser::new(Tokenizer::new(), PeakFinder::new()),
+        let (output1, _, steps1) = parse_all_with_state::<PeakFinderConfig>(
             &input.s,
+            (TokenizerConfig, PeakFinderConfig),
             &mut input.cache,
         );
         assert!(!output1.output.is_empty());
         assert_eq!(steps1, 7);
         assert!(!input.cache.is_empty());
 
-        let (output2, _, steps2) = parse_all_with_state(
-            || ComposedParser::new(Tokenizer::new(), PeakFinder::new()),
+        let (output2, _, steps2) = parse_all_with_state::<PeakFinderConfig>(
             &input.s,
+            (TokenizerConfig, PeakFinderConfig),
             &mut input.cache,
         );
         assert_eq!(output2, output1);
@@ -2025,9 +2318,9 @@ mod tests {
 
         let to_insert = " xy z";
         input.insert_str(0, to_insert);
-        let (output3, _, steps3) = parse_all_with_state(
-            || ComposedParser::new(Tokenizer::new(), PeakFinder::new()),
+        let (output3, _, steps3) = parse_all_with_state::<PeakFinderConfig>(
             &input.s,
+            (TokenizerConfig, PeakFinderConfig),
             &mut input.cache,
         );
         assert_eq!(
@@ -2041,9 +2334,9 @@ mod tests {
         assert_eq!(steps3, 3);
 
         input.replace_range(17..21, " mn o");
-        let (output4, _, steps4) = parse_all_with_state(
-            || ComposedParser::new(Tokenizer::new(), PeakFinder::new()),
+        let (output4, _, steps4) = parse_all_with_state::<PeakFinderConfig>(
             &input.s,
+            (TokenizerConfig, PeakFinderConfig),
             &mut input.cache,
         );
         assert_eq!(

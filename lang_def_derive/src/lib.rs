@@ -1,7 +1,6 @@
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
-use spanned::Spanned;
-use syn::*;
+use syn::{spanned::Spanned, visit_mut::VisitMut, *};
 
 #[proc_macro_derive(MemSerializable)]
 pub fn derive_mem_serializable(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -12,18 +11,21 @@ pub fn derive_mem_serializable(input: proc_macro::TokenStream) -> proc_macro::To
 
     let mut adjusted_generics = input.generics.clone();
     let pos = get_or_add_position_param(&mut adjusted_generics);
-    let (impl_generics, adjusted_ty_generics, _) = adjusted_generics.split_for_impl();
+    let (impl_generics, _, _) = adjusted_generics.split_for_impl();
 
     let mut serialized = input.clone();
     serialized.ident = Ident::new(&(ident.to_string() + "Serialized"), ident.span());
     let serialized_ident = &serialized.ident;
-    let serialized_ty_generics: &TypeGenerics;
     if make_data_serialized(&mut serialized.data, &pos) {
         serialized.generics = adjusted_generics.clone();
-        serialized_ty_generics = &adjusted_ty_generics;
-    } else {
-        serialized_ty_generics = &ty_generics;
+        serialized.generics.params = serialized
+            .generics
+            .params
+            .into_pairs()
+            .filter(|pair| !matches!(pair.value(), GenericParam::Lifetime(_)))
+            .collect();
     }
+    let (_, serialized_ty_generics, _) = serialized.generics.split_for_impl();
 
     let mut expanded = quote! {
         #[derive(Clone, PartialEq, Debug)]
@@ -85,7 +87,8 @@ fn make_named_fields_serialized(fields: &mut FieldsNamed, pos: &Ident) -> bool {
 }
 
 fn make_field_serialized(field: &mut Field, pos: &Ident) -> bool {
-    let ty = &field.ty;
+    let mut ty = field.ty.clone();
+    MakeLifetimesStatic.visit_type_mut(&mut ty);
     field.ty =
         parse_quote!(<#ty as ::lang_def::mem_serializable::MemSerializable<#pos>>::Serialized);
     true
@@ -115,6 +118,12 @@ fn get_or_add_position_param(generics: &mut Generics) -> Ident {
         eq_token: None,
         default: None,
     }));
+    if generics.lt_token.is_none() {
+        generics.lt_token = Some(Default::default());
+    }
+    if generics.gt_token.is_none() {
+        generics.gt_token = Some(Default::default());
+    }
     ident
 }
 
@@ -141,7 +150,7 @@ fn construct_serialize_body(data: &Data, ident: &Ident, serialized_ident: &Ident
                         #(#variant_members_1: #variant_member_idents_1),*
                     } => #serialized_ident::#variant_ident {
                         #(#variant_members_2: #variant_member_idents_2.serialize(relative_to)),*
-                    }
+                    },
                 });
             }
             quote! {
@@ -177,7 +186,7 @@ fn construct_deserialize_body(data: &Data, ident: &Ident, serialized_ident: &Ide
                         #(#variant_members_1: #variant_member_idents_1),*
                     } => #ident::#variant_ident {
                         #(#variant_members_2: <_>::deserialize(#variant_member_idents_2, relative_to)),*
-                    }
+                    },
                 });
             }
             quote! {
@@ -194,5 +203,13 @@ fn make_member_ident(member: Member) -> Ident {
     match member {
         Member::Named(ident) => ident,
         Member::Unnamed(index) => Ident::new(&format!("_{}", index.index), index.span()),
+    }
+}
+
+struct MakeLifetimesStatic;
+
+impl VisitMut for MakeLifetimesStatic {
+    fn visit_lifetime_mut(&mut self, i: &mut Lifetime) {
+        i.ident = Ident::new("static", Span::call_site());
     }
 }
