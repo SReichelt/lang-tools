@@ -420,7 +420,7 @@ pub enum DiagnosticSeverity {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ErrorKind {
-    ParseError,
+    SyntaxError,
     ResourceNotFound,
     IdentifierNotFound,
     TypeMismatch,
@@ -428,6 +428,7 @@ pub enum ErrorKind {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum WarningKind {
+    SyntaxWarning,
     UnusedObject,
     UnreachableCode,
     Deprecated,
@@ -1406,7 +1407,7 @@ pub mod testing {
                 if !ch.is_ascii() {
                     interface.error(
                         &ch,
-                        Some(ErrorKind::ParseError),
+                        Some(ErrorKind::SyntaxError),
                         format!("unexpected non-ascii character `{ch}`"),
                     );
                 } else if ch.is_ascii_whitespace() {
@@ -1421,7 +1422,11 @@ pub mod testing {
                         len += 1;
                     }
                     if len > 1 {
-                        interface.warning(span, None, format!("excessive whitespace length {len}"));
+                        interface.warning(
+                            span,
+                            Some(WarningKind::SyntaxWarning),
+                            format!("excessive whitespace length {len}"),
+                        );
                     }
                 } else {
                     let mut span = ch.span();
@@ -1671,7 +1676,7 @@ mod tests {
             [
                 WithSpan::new(
                     Diagnostic {
-                        severity: DiagnosticSeverity::Warning(None),
+                        severity: DiagnosticSeverity::Warning(Some(WarningKind::SyntaxWarning)),
                         message: DiagnosticMessage {
                             msg: "excessive whitespace length 2".into(),
                             hints: Vec::new()
@@ -1681,7 +1686,7 @@ mod tests {
                 ),
                 WithSpan::new(
                     Diagnostic {
-                        severity: DiagnosticSeverity::Warning(None),
+                        severity: DiagnosticSeverity::Warning(Some(WarningKind::SyntaxWarning)),
                         message: DiagnosticMessage {
                             msg: "excessive whitespace length 2".into(),
                             hints: Vec::new()
@@ -1729,7 +1734,7 @@ mod tests {
             [
                 WithSpan::new(
                     Diagnostic {
-                        severity: DiagnosticSeverity::Warning(None),
+                        severity: DiagnosticSeverity::Warning(Some(WarningKind::SyntaxWarning)),
                         message: DiagnosticMessage {
                             msg: "excessive whitespace length 2".into(),
                             hints: Vec::new()
@@ -1739,7 +1744,7 @@ mod tests {
                 ),
                 WithSpan::new(
                     Diagnostic {
-                        severity: DiagnosticSeverity::Warning(None),
+                        severity: DiagnosticSeverity::Warning(Some(WarningKind::SyntaxWarning)),
                         message: DiagnosticMessage {
                             msg: "excessive whitespace length 2".into(),
                             hints: Vec::new()
@@ -1829,7 +1834,7 @@ mod tests {
             [
                 WithSpan::new(
                     Diagnostic {
-                        severity: DiagnosticSeverity::Warning(None),
+                        severity: DiagnosticSeverity::Warning(Some(WarningKind::SyntaxWarning)),
                         message: DiagnosticMessage {
                             msg: "excessive whitespace length 2".into(),
                             hints: Vec::new()
@@ -1839,7 +1844,7 @@ mod tests {
                 ),
                 WithSpan::new(
                     Diagnostic {
-                        severity: DiagnosticSeverity::Warning(None),
+                        severity: DiagnosticSeverity::Warning(Some(WarningKind::SyntaxWarning)),
                         message: DiagnosticMessage {
                             msg: "excessive whitespace length 2".into(),
                             hints: Vec::new()
@@ -1892,7 +1897,7 @@ mod tests {
             [
                 WithSpan::new(
                     Diagnostic {
-                        severity: DiagnosticSeverity::Warning(None),
+                        severity: DiagnosticSeverity::Warning(Some(WarningKind::SyntaxWarning)),
                         message: DiagnosticMessage {
                             msg: "excessive whitespace length 2".into(),
                             hints: Vec::new()
@@ -1902,7 +1907,7 @@ mod tests {
                 ),
                 WithSpan::new(
                     Diagnostic {
-                        severity: DiagnosticSeverity::Warning(None),
+                        severity: DiagnosticSeverity::Warning(Some(WarningKind::SyntaxWarning)),
                         message: DiagnosticMessage {
                             msg: "excessive whitespace length 2".into(),
                             hints: Vec::new()
@@ -1935,7 +1940,7 @@ mod tests {
             [
                 WithSpan::new(
                     Diagnostic {
-                        severity: DiagnosticSeverity::Warning(None),
+                        severity: DiagnosticSeverity::Warning(Some(WarningKind::SyntaxWarning)),
                         message: DiagnosticMessage {
                             msg: "excessive whitespace length 3".into(),
                             hints: Vec::new()

@@ -766,7 +766,7 @@ mod tests {
                 ExpectedFragmentContent::WithDiag(
                     Box::new(ExpectedFragmentContent::Input("  ")),
                     (
-                        DiagnosticSeverity::Warning(None),
+                        DiagnosticSeverity::Warning(Some(WarningKind::SyntaxWarning)),
                         "excessive whitespace length 2".into(),
                     ),
                 ),
@@ -791,7 +791,7 @@ mod tests {
                 ExpectedFragmentContent::WithDiag(
                     Box::new(ExpectedFragmentContent::Input("   ")),
                     (
-                        DiagnosticSeverity::Warning(None),
+                        DiagnosticSeverity::Warning(Some(WarningKind::SyntaxWarning)),
                         "excessive whitespace length 3".into(),
                     ),
                 ),
@@ -801,7 +801,7 @@ mod tests {
                 ExpectedFragmentContent::WithDiag(
                     Box::new(ExpectedFragmentContent::Input("ä")),
                     (
-                        DiagnosticSeverity::Error(Some(ErrorKind::ParseError)),
+                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
                         "unexpected non-ascii character `ä`".into(),
                     ),
                 ),
@@ -818,7 +818,7 @@ mod tests {
                 ExpectedFragmentContent::WithDiag(
                     Box::new(ExpectedFragmentContent::Input("ö")),
                     (
-                        DiagnosticSeverity::Error(Some(ErrorKind::ParseError)),
+                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
                         "unexpected non-ascii character `ö`".into(),
                     ),
                 ),
@@ -835,7 +835,7 @@ mod tests {
                 ExpectedFragmentContent::WithDiag(
                     Box::new(ExpectedFragmentContent::Input("  ")),
                     (
-                        DiagnosticSeverity::Warning(None),
+                        DiagnosticSeverity::Warning(Some(WarningKind::SyntaxWarning)),
                         "excessive whitespace length 2".into(),
                     ),
                 ),
@@ -913,7 +913,7 @@ mod tests {
         let fragments = construct_tokenizer_output("a  b");
         assert_eq!(
             format!("{fragments:?}"),
-            "[(WithDesc(Input(\"a\"), String), Some(\"a\")), (WithDiag(Input(\"  \"), (Warning(None), \"excessive whitespace length 2\")), None), (WithDesc(Input(\"b\"), String), Some(\"b\"))]"
+            "[(WithDesc(Input(\"a\"), String), Some(\"a\")), (WithDiag(Input(\"  \"), (Warning(Some(SyntaxWarning)), \"excessive whitespace length 2\")), None), (WithDesc(Input(\"b\"), String), Some(\"b\"))]"
         );
     }
 }
