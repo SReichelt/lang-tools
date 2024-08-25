@@ -373,6 +373,11 @@ pub trait LookAhead {
             false
         }
     }
+
+    fn look_ahead_unbounded<R>(
+        &mut self,
+        f: impl FnMut(&Self::LookAheadItem) -> Option<R>,
+    ) -> Option<R>;
 }
 
 pub trait Consumable {
@@ -507,6 +512,20 @@ pub mod helpers {
                 None
             }
         }
+
+        pub fn iterate<R>(
+            parent: &'l mut Parent,
+            mut f: impl FnMut(&Parent::Item) -> Option<R>,
+        ) -> Option<R> {
+            let mut iter = parent.cur_iter().clone();
+            while let Some(item) = parent.iter_next(&mut iter) {
+                let result = f(&item);
+                if result.is_some() {
+                    return result;
+                }
+            }
+            None
+        }
     }
 
     impl<'l, Parent: IterLookAheadParent> Deref for IterLookAhead<'l, Parent> {
@@ -528,6 +547,13 @@ pub mod helpers {
 
         fn look_ahead(&mut self) -> Option<Self::LookAhead<'_>> {
             IterLookAhead::try_new(self)
+        }
+
+        fn look_ahead_unbounded<R>(
+            &mut self,
+            f: impl FnMut(&Self::LookAheadItem) -> Option<R>,
+        ) -> Option<R> {
+            IterLookAhead::iterate(self, f)
         }
     }
 
@@ -662,53 +688,10 @@ pub mod buffer {
     {
     }
 
-    pub struct BufferedParser<Out, Pos: Position, P> {
+    pub struct BufferedParser<IF: ParserInterfaceBase, Out, P> {
         parser: Option<P>,
-        buffer: ParserOutputBuffer<Out, Pos>,
+        buffer: ParserOutputBuffer<Out, IF::Pos>,
     }
-
-    impl<Out, Pos: Position, P> BufferedParser<Out, Pos, P> {
-        pub fn new(parser: P) -> Self {
-            BufferedParser {
-                parser: Some(parser),
-                buffer: ParserOutputBuffer::new(),
-            }
-        }
-
-        pub fn iterate<IF: ParserInterfaceBase<Pos = Pos>, R>(
-            &mut self,
-            input: &mut IF,
-            f: impl FnOnce(&mut ParserOutputIter<IF, Out, P>) -> R,
-        ) -> R {
-            ParserOutputIter::with_temp_ref_pair(input, self, f)
-        }
-    }
-
-    impl<Out: MemSerializable<Pos>, Pos: Position, P: MemSerializable<Pos>> MemSerializable<Pos>
-        for BufferedParser<Out, Pos, P>
-    {
-        type Serialized = (
-            Option<P::Serialized>,
-            <ParserOutputBuffer<Out, Pos> as MemSerializable<Pos>>::Serialized,
-        );
-
-        fn serialize(&self, relative_to: &Pos) -> Self::Serialized {
-            (
-                self.parser.serialize(relative_to),
-                self.buffer.serialize(relative_to),
-            )
-        }
-
-        fn deserialize(serialized: &Self::Serialized, relative_to: &Pos) -> Self {
-            BufferedParser {
-                parser: <_>::deserialize(&serialized.0, relative_to),
-                buffer: <_>::deserialize(&serialized.1, relative_to),
-            }
-        }
-    }
-
-    pub type ParserOutputIter<IF, Out, P> =
-        TempRefPair<IF, BufferedParser<Out, <IF as ParserInterfaceBase>::Pos, P>>;
 
     impl<
             Config1,
@@ -716,15 +699,43 @@ pub mod buffer {
             IF: ParserInputInterface<Config = (Config1, Config2)>,
             Out,
             P: Parser<BufferedParserInterface<IF, Out>>,
-        > ParserOutputIter<IF, Out, P>
+        > BufferedParser<IF, Out, P>
     {
-        pub(crate) fn finish(&mut self) {
-            let (interface, bp) = self.get_refs_mut();
-            bp.buffer.0.clear();
-            if let Some(parser) = &mut bp.parser {
+        pub fn new(parser: P) -> Self {
+            BufferedParser {
+                parser: Some(parser),
+                buffer: ParserOutputBuffer::new(),
+            }
+        }
+
+        pub fn iterate<R>(
+            &mut self,
+            interface: &mut IF,
+            f: impl FnOnce(&mut ParserOutputIter<IF, Out, P>) -> R,
+        ) -> R {
+            ParserOutputIter::with_temp_ref_pair(interface, self, f)
+        }
+
+        fn try_parse_next(&mut self, interface: &mut IF) -> bool {
+            let Some(parser) = &mut self.parser else {
+                return false;
+            };
+            if BufferedParserInterface::with_temp_ref_pair(
+                interface,
+                &mut self.buffer,
+                |parser_interface| parser.parse(parser_interface),
+            ) {
+                self.parser = None;
+            }
+            true
+        }
+
+        pub(crate) fn finish(&mut self, interface: &mut IF) {
+            self.buffer.0.clear();
+            if let Some(parser) = &mut self.parser {
                 BufferedParserInterface::with_temp_ref_pair(
                     interface,
-                    &mut bp.buffer,
+                    &mut self.buffer,
                     |parser_interface| {
                         while !parser.parse(parser_interface) {
                             let buffer = parser_interface.get_refs_mut().1;
@@ -732,10 +743,35 @@ pub mod buffer {
                         }
                     },
                 );
-                bp.parser = None;
+                self.parser = None;
             }
         }
     }
+
+    impl<IF: ParserInterfaceBase, Out: MemSerializable<IF::Pos>, P: MemSerializable<IF::Pos>>
+        MemSerializable<IF::Pos> for BufferedParser<IF, Out, P>
+    {
+        type Serialized = (
+            Option<P::Serialized>,
+            <ParserOutputBuffer<Out, IF::Pos> as MemSerializable<IF::Pos>>::Serialized,
+        );
+
+        fn serialize(&self, relative_to: &IF::Pos) -> Self::Serialized {
+            (
+                self.parser.serialize(relative_to),
+                self.buffer.serialize(relative_to),
+            )
+        }
+
+        fn deserialize(serialized: &Self::Serialized, relative_to: &IF::Pos) -> Self {
+            BufferedParser {
+                parser: <_>::deserialize(&serialized.0, relative_to),
+                buffer: <_>::deserialize(&serialized.1, relative_to),
+            }
+        }
+    }
+
+    pub type ParserOutputIter<IF, Out, P> = TempRefPair<IF, BufferedParser<IF, Out, P>>;
 
     impl<
             Config1,
@@ -754,15 +790,8 @@ pub mod buffer {
                 if item.is_some() {
                     return item;
                 }
-                let Some(parser) = &mut bp.parser else {
+                if !bp.try_parse_next(interface) {
                     return None;
-                };
-                if BufferedParserInterface::with_temp_ref_pair(
-                    interface,
-                    &mut bp.buffer,
-                    |parser_interface| parser.parse(parser_interface),
-                ) {
-                    bp.parser = None;
                 }
             }
         }
@@ -796,6 +825,13 @@ pub mod buffer {
 
         fn look_ahead(&mut self) -> Option<Self::LookAhead<'_>> {
             LookAheadItem::try_new(self)
+        }
+
+        fn look_ahead_unbounded<R>(
+            &mut self,
+            f: impl FnMut(&Self::LookAheadItem) -> Option<R>,
+        ) -> Option<R> {
+            self.iterate(f)
         }
     }
 
@@ -831,6 +867,8 @@ pub mod buffer {
             &mut self,
             additional_item: WithSpan<Self::In, Self::Pos>,
         ) -> Self::NextConsumedItems;
+
+        fn iterate<R>(&mut self, f: impl FnMut(&Self::In) -> Option<R>) -> Option<R>;
     }
 
     impl<
@@ -850,8 +888,8 @@ pub mod buffer {
         }
 
         fn return_item(&mut self, item: WithSpan<Self::In, Self::Pos>) {
-            let (_, parser) = self.get_refs_mut();
-            parser.buffer.0.push_front(item);
+            let (_, bp) = self.get_refs_mut();
+            bp.buffer.0.push_front(item);
         }
 
         fn consume_items(
@@ -859,6 +897,24 @@ pub mod buffer {
             additional_item: WithSpan<Self::In, Self::Pos>,
         ) -> Self::NextConsumedItems {
             additional_item
+        }
+
+        fn iterate<R>(&mut self, mut f: impl FnMut(&Self::In) -> Option<R>) -> Option<R> {
+            let (interface, bp) = self.get_refs_mut();
+            let mut pos = 0;
+            loop {
+                let mut iter = bp.buffer.0.iter().skip(pos);
+                while let Some(item) = iter.next() {
+                    let result = f(&*item);
+                    if result.is_some() {
+                        return result;
+                    }
+                }
+                pos = bp.buffer.0.len();
+                if !bp.try_parse_next(interface) {
+                    return None;
+                }
+            }
         }
     }
 
@@ -906,6 +962,13 @@ pub mod buffer {
         fn look_ahead(&mut self) -> Option<Self::LookAhead<'_>> {
             LookAheadItem::try_new(self)
         }
+
+        fn look_ahead_unbounded<R>(
+            &mut self,
+            f: impl FnMut(&Self::LookAheadItem) -> Option<R>,
+        ) -> Option<R> {
+            self.iterate(f)
+        }
     }
 
     impl<'l, Parent: LookAheadParent> Consumable for LookAheadItem<'l, Parent> {
@@ -937,6 +1000,10 @@ pub mod buffer {
                 self.parent.consume_items(take(&mut self.item).unwrap()),
                 additional_item,
             )
+        }
+
+        fn iterate<R>(&mut self, f: impl FnMut(&Self::In) -> Option<R>) -> Option<R> {
+            self.parent.iterate(f)
         }
     }
 }
@@ -1006,7 +1073,7 @@ pub mod compose {
     }
 
     pub struct ComposedParser<IF: ParserInterfaceBase, Mid, P1, P2> {
-        p1: BufferedParser<Mid, IF::Pos, P1>,
+        p1: BufferedParser<IF, Mid, P1>,
         p2: P2,
     }
 
@@ -1066,15 +1133,15 @@ pub mod compose {
         > Parser<IF> for ComposedParser<IF, Mid, P1, P2>
     {
         fn parse(&mut self, interface: &mut IF) -> bool {
-            self.p1.iterate(interface, |p2_interface| {
-                let result = self.p2.parse(p2_interface);
-                if result {
-                    // If the second parser finishes early, make sure that the first parser is run
-                    // to completion nevertheless, so that we don't lose any diagnostics.
-                    p2_interface.finish();
-                }
-                result
-            })
+            let result = self
+                .p1
+                .iterate(interface, |p2_interface| self.p2.parse(p2_interface));
+            if result {
+                // If the second parser finishes early, make sure that the first parser is run
+                // to completion nevertheless, so that we don't lose any diagnostics.
+                self.p1.finish(interface);
+            }
+            result
         }
     }
 }
@@ -1242,6 +1309,13 @@ pub mod str {
 
         fn look_ahead(&mut self) -> Option<Self::LookAhead<'_>> {
             IterLookAhead::try_new(self)
+        }
+
+        fn look_ahead_unbounded<R>(
+            &mut self,
+            f: impl FnMut(&Self::LookAheadItem) -> Option<R>,
+        ) -> Option<R> {
+            IterLookAhead::iterate(self, f)
         }
     }
 
@@ -1826,6 +1900,100 @@ mod tests {
             assert_eq!(
                 token,
                 WithSpan::new(Cow::Borrowed("kl"), StrPosition::span_from_range(16..18))
+            );
+        });
+
+        assert_eq!(
+            interface.diag.diag,
+            [
+                WithSpan::new(
+                    Diagnostic {
+                        severity: DiagnosticSeverity::Warning(Some(WarningKind::SyntaxWarning)),
+                        message: DiagnosticMessage {
+                            msg: "excessive whitespace length 2".into(),
+                            hints: Vec::new()
+                        }
+                    },
+                    StrPosition::span_from_range(6..8)
+                ),
+                WithSpan::new(
+                    Diagnostic {
+                        severity: DiagnosticSeverity::Warning(Some(WarningKind::SyntaxWarning)),
+                        message: DiagnosticMessage {
+                            msg: "excessive whitespace length 2".into(),
+                            hints: Vec::new()
+                        }
+                    },
+                    StrPosition::span_from_range(14..16)
+                )
+            ]
+        );
+        assert_eq!(
+            interface.diag.desc,
+            [
+                WithSpan::new(SpanDesc::String, StrPosition::span_from_range(0..3)),
+                WithSpan::new(SpanDesc::String, StrPosition::span_from_range(4..6)),
+                WithSpan::new(SpanDesc::String, StrPosition::span_from_range(8..12)),
+                WithSpan::new(SpanDesc::String, StrPosition::span_from_range(13..14)),
+                WithSpan::new(SpanDesc::String, StrPosition::span_from_range(16..18)),
+            ]
+        );
+    }
+
+    #[test]
+    fn can_iterate_over_tokens_with_unbounded_lookahead() {
+        let mut interface = StandardParserInterface {
+            input: StrInput::new("abc de  fghi j  kl"),
+            output: (),
+            diag: TestDiagnostics::new(),
+            config: ((), ()),
+        };
+        let mut tokenizer = BufferedParser::new(Tokenizer::new());
+
+        tokenizer.iterate(&mut interface, |iter| {
+            let token = iter.next().unwrap();
+            assert_eq!(
+                token,
+                WithSpan::new(Cow::Borrowed("abc"), StrPosition::span_from_range(0..3))
+            );
+
+            let j_len = iter.look_ahead_unbounded(|token| {
+                if *token == "j" {
+                    Some(token.len())
+                } else {
+                    None
+                }
+            });
+            assert_eq!(j_len, Some(1));
+
+            let token = iter.next().unwrap();
+            assert_eq!(
+                token,
+                WithSpan::new(Cow::Borrowed("de"), StrPosition::span_from_range(4..6))
+            );
+
+            let abc_len = iter.look_ahead_unbounded(|token| {
+                if *token == "abc" {
+                    Some(token.len())
+                } else {
+                    None
+                }
+            });
+            assert_eq!(abc_len, None);
+
+            let kl_len = iter.look_ahead_unbounded(|token| {
+                if *token == "kl" {
+                    Some(token.len())
+                } else {
+                    None
+                }
+            });
+            assert_eq!(kl_len, Some(2));
+
+            let token = iter.next().unwrap();
+            assert_eq!(
+                token,
+                WithSpan::new(Cow::Borrowed("fghi"), StrPosition::span_from_range(8..12))
             );
         });
 

@@ -400,6 +400,13 @@ mod internal {
         fn look_ahead(&mut self) -> Option<Self::LookAhead<'_>> {
             IterLookAhead::try_new(self)
         }
+
+        fn look_ahead_unbounded<R>(
+            &mut self,
+            f: impl FnMut(&Self::LookAheadItem) -> Option<R>,
+        ) -> Option<R> {
+            IterLookAhead::iterate(self, f)
+        }
     }
 
     impl<'a, 'b, Out, Config> IterLookAheadParent for FragmentParserInterface<'a, 'b, Out, Config> {
