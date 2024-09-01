@@ -1,5 +1,5 @@
 [package]
-name = "lang_def_derive"
+name = "lang-def-derive"
 version = "0.1.0"
 edition = "2021"
 

@@ -5,7 +5,7 @@ use std::{
     ops::{Deref, Range},
 };
 
-use crate::mem_serializable::MemSerializable;
+use crate::{impl_mem_serializable_self, mem_serializable::MemSerializable};
 
 /// This trait defines a parser that performs the initial analysis of a text document; as much as is
 /// possible in a single pass (currently without access to other documents).
@@ -374,6 +374,10 @@ pub trait LookAhead {
         }
     }
 
+    fn has_next(&mut self) -> bool {
+        self.look_ahead().is_some()
+    }
+
     fn look_ahead_unbounded<R>(
         &mut self,
         f: impl FnMut(&Self::LookAheadItem) -> Option<R>,
@@ -462,17 +466,21 @@ pub enum SpanDesc {
     Keyword,
     Number,
     String,
-    ParamNotation(ParamScopeDesc),
-    ParamRef(ParamScopeDesc),
+    VarDef(VarScopeDesc),
+    VarRef(VarScopeDesc),
 }
 
+impl_mem_serializable_self!(SpanDesc);
+
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum ParamScopeDesc {
+pub enum VarScopeDesc {
     Global,
+    Instance,
+    Field,
     Local,
-    Object,
-    Extra,
 }
+
+impl_mem_serializable_self!(VarScopeDesc);
 
 pub mod helpers {
     use std::mem::take;
@@ -813,34 +821,6 @@ pub mod buffer {
             IF: ParserInputInterface<Config = (Config1, Config2)>,
             Out,
             P: Parser<BufferedParserInterface<IF, Out>>,
-        > LookAhead for ParserOutputIter<IF, Out, P>
-    {
-        type LookAheadItem = Out;
-        type ConsumedItem = WithSpan<Out, IF::Pos>;
-        type NextConsumedItems = WithSpan<Out, IF::Pos>;
-
-        type LookAhead<'l> = LookAheadItem<'l, Self>
-        where
-            Self: 'l;
-
-        fn look_ahead(&mut self) -> Option<Self::LookAhead<'_>> {
-            LookAheadItem::try_new(self)
-        }
-
-        fn look_ahead_unbounded<R>(
-            &mut self,
-            f: impl FnMut(&Self::LookAheadItem) -> Option<R>,
-        ) -> Option<R> {
-            self.iterate(f)
-        }
-    }
-
-    impl<
-            Config1,
-            Config2: 'static,
-            IF: ParserInputInterface<Config = (Config1, Config2)>,
-            Out,
-            P: Parser<BufferedParserInterface<IF, Out>>,
         > ParserInput for ParserOutputIter<IF, Out, P>
     {
         type In = Out;
@@ -861,14 +841,58 @@ pub mod buffer {
         type Pos: Position;
         type NextConsumedItems;
 
-        fn next_item(&mut self) -> Option<WithSpan<Self::In, Self::Pos>>;
+        fn next_item(
+            &mut self,
+            pred: impl FnOnce(&Self::In) -> bool,
+        ) -> Option<WithSpan<Self::In, Self::Pos>>;
+
         fn return_item(&mut self, item: WithSpan<Self::In, Self::Pos>);
+
         fn consume_items(
             &mut self,
             additional_item: WithSpan<Self::In, Self::Pos>,
         ) -> Self::NextConsumedItems;
 
+        fn peek<R>(&mut self, f: impl FnOnce(&Self::In) -> R) -> Option<R>;
+
         fn iterate<R>(&mut self, f: impl FnMut(&Self::In) -> Option<R>) -> Option<R>;
+    }
+
+    impl<T: LookAheadParent> LookAhead for T {
+        type LookAheadItem = T::In;
+        type ConsumedItem = WithSpan<T::In, T::Pos>;
+        type NextConsumedItems = T::NextConsumedItems;
+
+        type LookAhead<'l> = LookAheadItem<'l, Self>
+        where
+            Self: 'l;
+
+        fn look_ahead(&mut self) -> Option<Self::LookAhead<'_>> {
+            LookAheadItem::try_new(self)
+        }
+
+        fn next_if(
+            &mut self,
+            pred: impl FnOnce(&Self::LookAheadItem) -> bool,
+        ) -> Option<Self::NextConsumedItems> {
+            let item = self.next_item(pred)?;
+            Some(self.consume_items(item))
+        }
+
+        fn check_next(&mut self, pred: impl FnOnce(&Self::LookAheadItem) -> bool) -> bool {
+            self.peek(pred).unwrap_or(false)
+        }
+
+        fn has_next(&mut self) -> bool {
+            self.check_next(|_| true)
+        }
+
+        fn look_ahead_unbounded<R>(
+            &mut self,
+            f: impl FnMut(&Self::LookAheadItem) -> Option<R>,
+        ) -> Option<R> {
+            self.iterate(f)
+        }
     }
 
     impl<
@@ -883,8 +907,23 @@ pub mod buffer {
         type Pos = IF::Pos;
         type NextConsumedItems = WithSpan<Self::In, Self::Pos>;
 
-        fn next_item(&mut self) -> Option<WithSpan<Self::In, Self::Pos>> {
-            self.next()
+        fn next_item(
+            &mut self,
+            pred: impl FnOnce(&Self::In) -> bool,
+        ) -> Option<WithSpan<Self::In, Self::Pos>> {
+            let (interface, bp) = self.get_refs_mut();
+            loop {
+                if let Some(item) = bp.buffer.0.front() {
+                    if pred(item) {
+                        return bp.buffer.0.pop_front();
+                    } else {
+                        return None;
+                    }
+                }
+                if !bp.try_parse_next(interface) {
+                    return None;
+                }
+            }
         }
 
         fn return_item(&mut self, item: WithSpan<Self::In, Self::Pos>) {
@@ -897,6 +936,18 @@ pub mod buffer {
             additional_item: WithSpan<Self::In, Self::Pos>,
         ) -> Self::NextConsumedItems {
             additional_item
+        }
+
+        fn peek<R>(&mut self, f: impl FnOnce(&Self::In) -> R) -> Option<R> {
+            let (interface, bp) = self.get_refs_mut();
+            loop {
+                if let Some(item) = bp.buffer.0.front() {
+                    return Some(f(item));
+                }
+                if !bp.try_parse_next(interface) {
+                    return None;
+                }
+            }
         }
 
         fn iterate<R>(&mut self, mut f: impl FnMut(&Self::In) -> Option<R>) -> Option<R> {
@@ -925,7 +976,7 @@ pub mod buffer {
 
     impl<'l, Parent: LookAheadParent> LookAheadItem<'l, Parent> {
         fn try_new(parent: &'l mut Parent) -> Option<Self> {
-            let item = parent.next_item();
+            let item = parent.next_item(|_| true);
             if item.is_some() {
                 Some(LookAheadItem { parent, item })
             } else {
@@ -950,27 +1001,6 @@ pub mod buffer {
         }
     }
 
-    impl<'l, Parent: LookAheadParent> LookAhead for LookAheadItem<'l, Parent> {
-        type LookAheadItem = Parent::In;
-        type ConsumedItem = WithSpan<Parent::In, Parent::Pos>;
-        type NextConsumedItems = (Parent::NextConsumedItems, Self::ConsumedItem);
-
-        type LookAhead<'m> = LookAheadItem<'m, Self>
-        where
-            Self: 'm;
-
-        fn look_ahead(&mut self) -> Option<Self::LookAhead<'_>> {
-            LookAheadItem::try_new(self)
-        }
-
-        fn look_ahead_unbounded<R>(
-            &mut self,
-            f: impl FnMut(&Self::LookAheadItem) -> Option<R>,
-        ) -> Option<R> {
-            self.iterate(f)
-        }
-    }
-
     impl<'l, Parent: LookAheadParent> Consumable for LookAheadItem<'l, Parent> {
         type ConsumedItems = Parent::NextConsumedItems;
 
@@ -984,8 +1014,11 @@ pub mod buffer {
         type Pos = Parent::Pos;
         type NextConsumedItems = (Parent::NextConsumedItems, WithSpan<Self::In, Self::Pos>);
 
-        fn next_item(&mut self) -> Option<WithSpan<Self::In, Self::Pos>> {
-            self.parent.next_item()
+        fn next_item(
+            &mut self,
+            pred: impl FnOnce(&Self::In) -> bool,
+        ) -> Option<WithSpan<Self::In, Self::Pos>> {
+            self.parent.next_item(pred)
         }
 
         fn return_item(&mut self, item: WithSpan<Self::In, Self::Pos>) {
@@ -1000,6 +1033,10 @@ pub mod buffer {
                 self.parent.consume_items(take(&mut self.item).unwrap()),
                 additional_item,
             )
+        }
+
+        fn peek<R>(&mut self, f: impl FnOnce(&Self::In) -> R) -> Option<R> {
+            self.parent.peek(f)
         }
 
         fn iterate<R>(&mut self, f: impl FnMut(&Self::In) -> Option<R>) -> Option<R> {
@@ -1447,8 +1484,6 @@ pub mod testing {
     pub mod test_parsers {
         use std::mem::replace;
 
-        use crate::mem_serializable::impl_mem_serializable_self;
-
         use super::{compose::*, *};
 
         pub type Token<'a> = Cow<'a, str>;
@@ -1519,6 +1554,7 @@ pub mod testing {
             }
         }
 
+        #[derive(Clone)]
         pub struct TokenizerConfig;
 
         impl CharParserDesc for TokenizerConfig {
@@ -1605,6 +1641,7 @@ pub mod testing {
             }
         }
 
+        #[derive(Clone)]
         pub struct PairMakerConfig;
 
         impl CharParserDesc for PairMakerConfig {
@@ -1685,6 +1722,7 @@ pub mod testing {
             }
         }
 
+        #[derive(Clone)]
         pub struct PeakFinderConfig;
 
         impl CharParserDesc for PeakFinderConfig {

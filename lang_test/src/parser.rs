@@ -1,15 +1,6 @@
-use std::{
-    cmp::min_by,
-    fmt::{self, Debug},
-    iter::Peekable,
-    ops::Range,
-    slice,
-};
+use std::{cmp::min_by, fmt::Debug, iter::Peekable, ops::Range, slice};
 
-use lang_def::{
-    mem_serializable::*,
-    parser::{str::*, testing::str::*, *},
-};
+use lang_def::parser::{str::*, testing::str::*, *};
 
 use internal::*;
 
@@ -21,7 +12,7 @@ pub enum ExpectedFragmentContent<'a> {
     Input(&'a str),
     WithDiag(Box<ExpectedFragmentContent<'a>>, ExpectedDiagnostic),
     WithDesc(Box<ExpectedFragmentContent<'a>>, SpanDesc),
-    Nested(Vec<ExpectedFragmentContent<'a>>),
+    Seq(Vec<ExpectedFragmentContent<'a>>),
 }
 
 pub type ExpectedDiagnostic = (DiagnosticSeverity, String);
@@ -34,20 +25,22 @@ pub type ExpectedDiagnostic = (DiagnosticSeverity, String);
 /// [`print_parser_output`].
 pub fn assert_parser_output<
     'a,
-    Desc: CharParserDesc<Out<'a, FragmentPosition>: PartialEq + Debug> + 'a,
+    Desc: CharParserDesc<Out<'a, StrPosition>: PartialEq + Debug> + 'a,
 >(
-    expected_fragments: Vec<ExpectedFragment<'a, Desc::Out<'a, FragmentPosition>>>,
+    expected_fragments: Vec<ExpectedFragment<'a, Desc::Out<'a, StrPosition>>>,
     mut config: Desc::Config<'a>,
 ) {
-    let mut pre_fragment = FlattenedFragment::new("");
+    let mut pos = 0;
+    let mut pre_fragment = FlattenedFragment::new(pos, "");
     let mut flattened_fragments = Vec::new();
     flatten_fragments(
         expected_fragments,
+        &mut pos,
         &mut pre_fragment,
         &mut flattened_fragments,
     );
     let mut interface =
-        FragmentParserInterface::new(&pre_fragment, &flattened_fragments, &mut config);
+        FragmentParserInterface::new(pos, &pre_fragment, &flattened_fragments, &mut config);
     let mut parser = Desc::parser(&interface);
     while !parser.parse(&mut interface) {}
     interface.check_empty();
@@ -55,22 +48,30 @@ pub fn assert_parser_output<
 
 fn flatten_fragments<'a, Out>(
     fragments: Vec<ExpectedFragment<'a, Out>>,
+    pos: &mut usize,
     pre_fragment: &mut FlattenedFragment<'a, Out>,
     flattened_fragments: &mut Vec<FlattenedFragment<'a, Out>>,
 ) {
     let mut paren_level = 0;
     print!("parsing: ");
     for (content, output) in fragments {
-        let start_idx = flattened_fragments.len();
-        flatten_content(content, pre_fragment, flattened_fragments, &mut paren_level);
+        let start_pos = *pos;
+        flatten_content(
+            content,
+            pos,
+            pre_fragment,
+            flattened_fragments,
+            &mut paren_level,
+        );
         if let Some(output) = output {
-            let start = FragmentPosition::fragment_start(start_idx);
-            let end = FragmentPosition::fragment_start(flattened_fragments.len());
             flattened_fragments
                 .last_mut()
                 .unwrap_or(pre_fragment)
                 .output
-                .push(WithSpan::new(output, start..end));
+                .push(WithSpan::new(
+                    output,
+                    StrPosition::span_from_range(start_pos..*pos),
+                ));
         }
     }
     println!("");
@@ -82,6 +83,7 @@ fn flatten_fragments<'a, Out>(
 
 fn flatten_content<'a, Out>(
     content: ExpectedFragmentContent<'a>,
+    pos: &mut usize,
     pre_fragment: &mut FlattenedFragment<'a, Out>,
     flattened_fragments: &mut Vec<FlattenedFragment<'a, Out>>,
     paren_level: &mut usize,
@@ -90,24 +92,26 @@ fn flatten_content<'a, Out>(
         ExpectedFragmentContent::Empty => {}
         ExpectedFragmentContent::Input(input) => {
             if !input.is_empty() {
-                flattened_fragments.push(FlattenedFragment::new(input));
+                flattened_fragments.push(FlattenedFragment::new(*pos, input));
+                *pos += input.len();
                 print!("{input}");
             }
         }
         ExpectedFragmentContent::WithDiag(inner, diag) => {
-            let start_idx = flattened_fragments.len();
-            flatten_content(*inner, pre_fragment, flattened_fragments, paren_level);
-            let start = FragmentPosition::fragment_start(start_idx);
-            let end = FragmentPosition::fragment_start(flattened_fragments.len());
+            let start_pos = *pos;
+            flatten_content(*inner, pos, pre_fragment, flattened_fragments, paren_level);
             flattened_fragments
                 .last_mut()
                 .unwrap_or(pre_fragment)
                 .diag
-                .push(WithSpan::new(diag, start..end));
+                .push(WithSpan::new(
+                    diag,
+                    StrPosition::span_from_range(start_pos..*pos),
+                ));
         }
         ExpectedFragmentContent::WithDesc(inner, desc) => {
-            let start_idx = flattened_fragments.len();
-            flatten_content(*inner, pre_fragment, flattened_fragments, paren_level);
+            let start_pos = *pos;
+            flatten_content(*inner, pos, pre_fragment, flattened_fragments, paren_level);
             match &desc {
                 SpanDesc::ParenStart => {
                     *paren_level += 1;
@@ -121,17 +125,18 @@ fn flatten_content<'a, Out>(
                 }
                 _ => {}
             }
-            let start = FragmentPosition::fragment_start(start_idx);
-            let end = FragmentPosition::fragment_start(flattened_fragments.len());
             flattened_fragments
                 .last_mut()
                 .unwrap_or(pre_fragment)
                 .desc
-                .push(WithSpan::new(desc, start..end));
+                .push(WithSpan::new(
+                    desc,
+                    StrPosition::span_from_range(start_pos..*pos),
+                ));
         }
-        ExpectedFragmentContent::Nested(inners) => {
+        ExpectedFragmentContent::Seq(inners) => {
             for inner in inners {
-                flatten_content(inner, pre_fragment, flattened_fragments, paren_level);
+                flatten_content(inner, pos, pre_fragment, flattened_fragments, paren_level);
             }
         }
     }
@@ -139,34 +144,32 @@ fn flatten_content<'a, Out>(
 
 /// Constructs the required input for [`assert_parser_output`] to match the current output produced
 /// by the parser for the given input.
-///
-/// (However, note that the encoding of positions does not match.)
-pub fn construct_parser_output<'a, Desc: CharParserDesc<Out<'a, StrPosition>: Debug>>(
+pub fn construct_parser_output<'a, Desc: CharParserDesc>(
     input: &'a str,
     config: Desc::Config<'a>,
 ) -> Vec<ExpectedFragment<'a, Desc::Out<'a, StrPosition>>> {
-    let mut interface = TestParserInterface::new(input, config);
-    let mut parser = Desc::parser(&interface);
-    while !parser.parse(&mut interface) {}
+    println!("parsing: {input}");
 
-    sort_by_spans(&mut interface.output.output);
-    sort_by_spans(&mut interface.diag.diag);
-    sort_by_spans(&mut interface.diag.desc);
+    let (mut output, mut diag) = parse_all::<Desc>(input, config);
+
+    sort_by_spans(&mut output.output);
+    sort_by_spans(&mut diag.diag);
+    sort_by_spans(&mut diag.desc);
 
     let mut fragments = Vec::new();
     let mut pos = StrPosition::from_usize(0);
-    let mut diag_iter = interface.diag.diag.iter().peekable();
-    let mut desc_iter = interface.diag.desc.iter().peekable();
-    for out in interface.output.output {
+    let mut diag_iter = diag.diag.iter().peekable();
+    let mut desc_iter = diag.desc.iter().peekable();
+    for out in output.output {
         let span = out.span();
         if pos < span.start {
-            match construct_fragment_content(input, pos..span.start, &mut diag_iter, &mut desc_iter)
-            {
-                ExpectedFragmentContent::Nested(inners) => {
-                    fragments.extend(inners.into_iter().map(|inner| (inner, None)))
-                }
-                content => fragments.push((content, None)),
-            }
+            append_fragment_content::<Desc>(
+                input,
+                pos..span.start,
+                &mut diag_iter,
+                &mut desc_iter,
+                &mut fragments,
+            );
             pos = span.start;
         }
         assert!(
@@ -181,14 +184,31 @@ pub fn construct_parser_output<'a, Desc: CharParserDesc<Out<'a, StrPosition>: De
     }
     let len = StrPosition::from_usize(input.len());
     if pos < len || diag_iter.peek().is_some() || desc_iter.peek().is_some() {
-        match construct_fragment_content(input, pos..len, &mut diag_iter, &mut desc_iter) {
-            ExpectedFragmentContent::Nested(inners) => {
-                fragments.extend(inners.into_iter().map(|inner| (inner, None)))
-            }
-            content => fragments.push((content, None)),
-        }
+        append_fragment_content::<Desc>(
+            input,
+            pos..len,
+            &mut diag_iter,
+            &mut desc_iter,
+            &mut fragments,
+        );
     }
     fragments
+}
+
+fn append_fragment_content<'a, Desc: CharParserDesc>(
+    input: &'a str,
+    span: Range<StrPosition>,
+    diag_iter: &mut Peekable<slice::Iter<WithSpan<Diagnostic<StrPosition>, StrPosition>>>,
+    desc_iter: &mut Peekable<slice::Iter<WithSpan<SpanDesc, StrPosition>>>,
+    fragments: &mut Vec<ExpectedFragment<'a, Desc::Out<'a, StrPosition>>>,
+) {
+    match construct_fragment_content(input, span, diag_iter, desc_iter) {
+        ExpectedFragmentContent::Empty => {}
+        ExpectedFragmentContent::Seq(inners) => {
+            fragments.extend(inners.into_iter().map(|inner| (inner, None)))
+        }
+        content => fragments.push((content, None)),
+    }
 }
 
 fn construct_fragment_content<'a>(
@@ -235,7 +255,7 @@ fn construct_fragment_content<'a>(
             let mut fragments = Vec::new();
             if next_span.start > span.start {
                 fragments.push(ExpectedFragmentContent::Input(
-                    &input[StrPosition::span_to_range(span.start..next_span.start.clone())],
+                    &input[StrPosition::span_to_range(span.start..next_span.start)],
                 ));
             }
             fragments.push(construct_fragment_content(
@@ -246,10 +266,10 @@ fn construct_fragment_content<'a>(
             ));
             match construct_fragment_content(input, next_span.end..span.end, diag_iter, desc_iter) {
                 ExpectedFragmentContent::Empty => {}
-                ExpectedFragmentContent::Nested(inners) => fragments.extend(inners),
+                ExpectedFragmentContent::Seq(inners) => fragments.extend(inners),
                 single => fragments.push(single),
             }
-            return ExpectedFragmentContent::Nested(fragments);
+            return ExpectedFragmentContent::Seq(fragments);
         }
     }
     if span.is_empty() {
@@ -268,61 +288,6 @@ pub fn print_parser_output<'a, Desc: CharParserDesc<Out<'a, StrPosition>: Debug>
     println!("{fragments:?}");
 }
 
-#[derive(Clone, Copy, PartialEq)]
-pub struct FragmentPosition {
-    pub fragment_idx: usize,
-    pub pos: StrPosition,
-}
-
-impl FragmentPosition {
-    pub fn fragment_start(fragment_idx: usize) -> Self {
-        FragmentPosition {
-            fragment_idx,
-            pos: StrPosition::from_usize(0),
-        }
-    }
-}
-
-impl MemSerializable<FragmentPosition> for FragmentPosition {
-    type Serialized = (
-        usize,
-        <StrPosition as MemSerializable<StrPosition>>::Serialized,
-    );
-
-    fn serialize(&self, relative_to: &FragmentPosition) -> Self::Serialized {
-        if self.fragment_idx == relative_to.fragment_idx {
-            (0, self.pos.serialize(&relative_to.pos))
-        } else {
-            (
-                relative_to.fragment_idx - self.fragment_idx,
-                self.pos.to_non_max_usize(),
-            )
-        }
-    }
-
-    fn deserialize(serialized: &Self::Serialized, relative_to: &FragmentPosition) -> Self {
-        if serialized.0 == 0 {
-            FragmentPosition {
-                fragment_idx: relative_to.fragment_idx,
-                pos: StrPosition::deserialize(&serialized.1, &relative_to.pos),
-            }
-        } else {
-            FragmentPosition {
-                fragment_idx: relative_to.fragment_idx - serialized.0,
-                pos: StrPosition::from_non_max_usize(serialized.1),
-            }
-        }
-    }
-}
-
-impl Position for FragmentPosition {}
-
-impl Debug for FragmentPosition {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_fmt(format_args!("({:?},{:?})", self.fragment_idx, self.pos))
-    }
-}
-
 mod internal {
     use std::{borrow::Cow, cmp::Ordering, iter::FusedIterator, ops::Range};
 
@@ -331,15 +296,17 @@ mod internal {
     use super::*;
 
     pub struct FlattenedFragment<'a, Out> {
+        pub start_pos: usize,
         pub input: &'a str,
-        pub output: Vec<WithSpan<Out, FragmentPosition>>,
-        pub diag: Vec<WithSpan<ExpectedDiagnostic, FragmentPosition>>,
-        pub desc: Vec<WithSpan<SpanDesc, FragmentPosition>>,
+        pub output: Vec<WithSpan<Out, StrPosition>>,
+        pub diag: Vec<WithSpan<ExpectedDiagnostic, StrPosition>>,
+        pub desc: Vec<WithSpan<SpanDesc, StrPosition>>,
     }
 
     impl<'a, Out> FlattenedFragment<'a, Out> {
-        pub fn new(input: &'a str) -> Self {
+        pub fn new(start_pos: usize, input: &'a str) -> Self {
             FlattenedFragment {
+                start_pos,
                 input,
                 output: Vec::new(),
                 diag: Vec::new(),
@@ -356,13 +323,14 @@ mod internal {
 
     impl<'a, 'b, Out, Config> FragmentParserInterface<'a, 'b, Out, Config> {
         pub fn new(
+            input_len: usize,
             pre_fragment: &'b FlattenedFragment<'a, Out>,
             fragments: &'b [FlattenedFragment<'a, Out>],
             config: &'b mut Config,
         ) -> Self {
             let mut expected_outputs = ExpectedOutputs::new();
             expected_outputs.add_fragment(pre_fragment);
-            let iter = FragmentIter::new(fragments, Some(&mut expected_outputs));
+            let iter = FragmentIter::new(input_len, fragments, Some(&mut expected_outputs));
             FragmentParserInterface {
                 config,
                 iter,
@@ -379,7 +347,7 @@ mod internal {
     }
 
     impl<'a, 'b, Out, Config> Iterator for FragmentParserInterface<'a, 'b, Out, Config> {
-        type Item = WithSpan<char, FragmentPosition>;
+        type Item = WithSpan<char, StrPosition>;
 
         fn next(&mut self) -> Option<Self::Item> {
             self.iter.next(Some(&mut self.expected_outputs))
@@ -390,7 +358,7 @@ mod internal {
 
     impl<'a, 'b, Out, Config> LookAhead for FragmentParserInterface<'a, 'b, Out, Config> {
         type LookAheadItem = char;
-        type ConsumedItem = WithSpan<char, FragmentPosition>;
+        type ConsumedItem = WithSpan<char, StrPosition>;
         type NextConsumedItems = Self::ConsumedItem;
 
         type LookAhead<'l> = IterLookAhead<'l, Self>
@@ -410,10 +378,10 @@ mod internal {
     }
 
     impl<'a, 'b, Out, Config> IterLookAheadParent for FragmentParserInterface<'a, 'b, Out, Config> {
-        type Pos = FragmentPosition;
+        type Pos = StrPosition;
         type Item = char;
         type Iter = FragmentIter<'a, 'b, Out>;
-        type NextConsumedItems = WithSpan<char, FragmentPosition>;
+        type NextConsumedItems = WithSpan<char, StrPosition>;
 
         fn cur_iter(&self) -> &Self::Iter {
             &self.iter
@@ -435,38 +403,44 @@ mod internal {
 
     impl<'a, 'b, Out, Config> ParserInput for FragmentParserInterface<'a, 'b, Out, Config> {
         type In = char;
-        type Pos = FragmentPosition;
+        type Pos = StrPosition;
 
         fn pos(&mut self) -> Self::Pos {
-            self.iter
-                .map_pos(self.iter.input_iter.pos_as_str_position())
+            self.iter.pos_as_str_position()
         }
     }
 
     impl<'a, 'b, Out, Config> CharParserInput<'a> for FragmentParserInterface<'a, 'b, Out, Config> {
         fn span_str(&self, span: impl Spanned<Pos = Self::Pos>) -> Cow<'a, str> {
+            let mut range = StrPosition::span_to_range(span.span());
             let fragments = self.iter.fragments;
-            let Range { start, end } = span.span();
-            if start.fragment_idx >= fragments.len() {
-                Cow::Borrowed("")
-            } else if start.fragment_idx == end.fragment_idx {
-                let fragment = &fragments[start.fragment_idx];
-                Cow::Borrowed(&fragment.input[start.pos.to_usize()..end.pos.to_usize()])
-            } else if start.fragment_idx + 1 == end.fragment_idx && end.pos.to_usize() == 0 {
-                let fragment = &fragments[start.fragment_idx];
-                Cow::Borrowed(&fragment.input[start.pos.to_usize()..])
-            } else {
-                let mut fragment_idx = start.fragment_idx;
-                let mut s = fragments[fragment_idx].input[start.pos.to_usize()..].to_owned();
+            let mut fragment_idx = fragments.partition_point(|fragment| {
+                fragment.start_pos + fragment.input.len() <= range.start
+            });
+            if fragment_idx >= fragments.len() {
+                assert_eq!(range.start, self.iter.input_len);
+                assert_eq!(range.end, self.iter.input_len);
+                return Cow::Borrowed("");
+            }
+            let fragment = &fragments[fragment_idx];
+            range.start -= fragment.start_pos;
+            range.end -= fragment.start_pos;
+            let mut fragment_len = fragment.input.len();
+            assert!(range.start < fragment_len);
+            if range.end <= fragment_len {
+                return Cow::Borrowed(&fragment.input[range]);
+            }
+            let mut s = fragment.input[range.start..].to_owned();
+            loop {
                 fragment_idx += 1;
-                while fragment_idx < end.fragment_idx {
-                    s += fragments[fragment_idx].input;
-                    fragment_idx += 1;
+                range.end -= fragment_len;
+                let fragment = &fragments[fragment_idx];
+                fragment_len = fragment.input.len();
+                if range.end <= fragment_len {
+                    s += &fragment.input[..range.end];
+                    return Cow::Owned(s);
                 }
-                if end.fragment_idx < fragments.len() {
-                    s += &fragments[fragment_idx].input[..end.pos.to_usize()];
-                }
-                Cow::Owned(s)
+                s += fragment.input;
             }
         }
     }
@@ -475,7 +449,7 @@ mod internal {
         for FragmentParserInterface<'a, 'b, Out, Config>
     {
         type Out = Out;
-        type Pos = FragmentPosition;
+        type Pos = StrPosition;
 
         fn out(&mut self, span: impl Spanned<Pos = Self::Pos>, out: Self::Out) {
             let out = WithSpan::new(out, span);
@@ -492,7 +466,7 @@ mod internal {
     }
 
     impl<'a, 'b, Out, Config> ParserDiagnostics for FragmentParserInterface<'a, 'b, Out, Config> {
-        type Pos = FragmentPosition;
+        type Pos = StrPosition;
 
         fn diag(&mut self, span: impl Spanned<Pos = Self::Pos>, diag: Diagnostic<Self::Pos>) {
             let diag = WithSpan::new((diag.severity, diag.message.msg), span);
@@ -523,7 +497,7 @@ mod internal {
 
     impl<'a, 'b, Out, Config> ParserInterfaceBase for FragmentParserInterface<'a, 'b, Out, Config> {
         type Config = Config;
-        type Pos = FragmentPosition;
+        type Pos = StrPosition;
 
         fn config(&self) -> &Self::Config {
             self.config
@@ -567,6 +541,7 @@ mod internal {
     }
 
     pub struct FragmentIter<'a, 'b, Out> {
+        input_len: usize,
         fragments: &'b [FlattenedFragment<'a, Out>],
         fragment_idx: usize,
         input_iter: StrIter<'a>,
@@ -574,10 +549,12 @@ mod internal {
 
     impl<'a, 'b, Out> FragmentIter<'a, 'b, Out> {
         fn new(
+            input_len: usize,
             fragments: &'b [FlattenedFragment<'a, Out>],
             expected_outputs: Option<&mut ExpectedOutputs<'b, Out>>,
         ) -> Self {
             let mut iter = FragmentIter {
+                input_len,
                 fragments,
                 fragment_idx: 0,
                 input_iter: StrIter::new(""),
@@ -601,7 +578,7 @@ mod internal {
         fn next(
             &mut self,
             mut expected_outputs: Option<&mut ExpectedOutputs<'b, Out>>,
-        ) -> Option<WithSpan<char, FragmentPosition>> {
+        ) -> Option<WithSpan<char, StrPosition>> {
             while self.fragment_idx < self.fragments.len() {
                 if let Some(next) = self.input_iter.next(&mut 0) {
                     return Some(self.map_char_with_span(next));
@@ -634,21 +611,16 @@ mod internal {
             }
         }
 
-        fn map_pos(&self, pos: StrPosition) -> FragmentPosition {
-            if self.fragment_idx < self.fragments.len()
-                && pos.to_usize() > 0
-                && pos.to_usize() == self.fragments[self.fragment_idx].input.len()
-            {
-                FragmentPosition::fragment_start(self.fragment_idx + 1)
+        fn map_pos(&self, pos: StrPosition) -> StrPosition {
+            let start_pos = if self.fragment_idx < self.fragments.len() {
+                self.fragments[self.fragment_idx].start_pos
             } else {
-                FragmentPosition {
-                    fragment_idx: self.fragment_idx,
-                    pos,
-                }
-            }
+                self.input_len
+            };
+            StrPosition::from_usize(start_pos + pos.to_usize())
         }
 
-        fn map_span(&self, span: Range<StrPosition>) -> Range<FragmentPosition> {
+        fn map_span(&self, span: Range<StrPosition>) -> Range<StrPosition> {
             let start = self.map_pos(span.start);
             let end = self.map_pos(span.end);
             start..end
@@ -657,14 +629,19 @@ mod internal {
         fn map_char_with_span(
             &self,
             ch: WithSpan<char, StrPosition>,
-        ) -> WithSpan<char, FragmentPosition> {
+        ) -> WithSpan<char, StrPosition> {
             WithSpan::new(*ch, self.map_span(ch.span()))
+        }
+
+        fn pos_as_str_position(&mut self) -> StrPosition {
+            self.map_pos(self.input_iter.pos_as_str_position())
         }
     }
 
     impl<'a, 'b, Out> Clone for FragmentIter<'a, 'b, Out> {
         fn clone(&self) -> Self {
-            Self {
+            FragmentIter {
+                input_len: self.input_len,
                 fragments: self.fragments,
                 fragment_idx: self.fragment_idx,
                 input_iter: self.input_iter.clone(),
@@ -672,7 +649,7 @@ mod internal {
         }
     }
 
-    type ExpectedOutput<'b, T> = Vec<&'b WithSpan<T, FragmentPosition>>;
+    type ExpectedOutput<'b, T> = Vec<&'b WithSpan<T, StrPosition>>;
 
     struct ExpectedOutputs<'b, Out> {
         expected_outputs: ExpectedOutput<'b, Out>,

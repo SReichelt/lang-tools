@@ -1,7 +1,7 @@
 [package]
-name = "lang_test"
+name = "lang-test"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-lang_def = { path = "../lang_def" }
+lang-def = { path = "../lang_def" }
