@@ -607,7 +607,7 @@ pub mod helpers {
 pub mod buffer {
     use std::{collections::VecDeque, mem::take};
 
-    use crate::util::TempRefPair;
+    use temp_inst::{TempInstMut, TempRefMut, TempRepr, TempReprMut, TempReprMutChk};
 
     use super::*;
 
@@ -642,8 +642,11 @@ pub mod buffer {
         }
     }
 
-    pub type BufferedParserInterface<IF, Out> =
-        TempRefPair<IF, ParserOutputBuffer<Out, <IF as ParserInterfaceBase>::Pos>>;
+    #[derive(TempRepr, TempReprMut, TempReprMutChk)]
+    pub struct BufferedParserInterface<IF: ParserInterfaceBase, Out> {
+        interface: TempRefMut<IF>,
+        buffer: TempRefMut<ParserOutputBuffer<Out, IF::Pos>>,
+    }
 
     impl<Config1, Config2: 'static, IF: ParserInterfaceBase<Config = (Config1, Config2)>, Out>
         ParserInterfaceBase for BufferedParserInterface<IF, Out>
@@ -652,12 +655,12 @@ pub mod buffer {
         type Config = Config1;
 
         fn config(&self) -> &Self::Config {
-            &self.get_refs().0.config().0
+            &self.interface.config().0
         }
 
         fn modify_config<R>(&mut self, f: impl FnOnce(&mut Self::Config) -> R) -> R {
-            self.get_refs_mut()
-                .0
+            self.interface
+                .get_mut()
                 .modify_config(|(config1, _)| f(config1))
         }
     }
@@ -671,11 +674,11 @@ pub mod buffer {
         type Diag = IF::Diag;
 
         fn input(&mut self) -> &mut Self::Input {
-            self.get_refs_mut().0.input()
+            self.interface.get_mut().input()
         }
 
         fn diagnostics(&mut self) -> &mut Self::Diag {
-            self.get_refs_mut().0.diagnostics()
+            self.interface.get_mut().diagnostics()
         }
     }
 
@@ -687,7 +690,7 @@ pub mod buffer {
         type Output = ParserOutputBuffer<Out, IF::Pos>;
 
         fn output(&mut self) -> &mut Self::Output {
-            self.get_refs_mut().1
+            self.buffer.get_mut()
         }
     }
 
@@ -721,18 +724,16 @@ pub mod buffer {
             interface: &mut IF,
             f: impl FnOnce(&mut ParserOutputIter<IF, Out, P>) -> R,
         ) -> R {
-            ParserOutputIter::with_temp_ref_pair(interface, self, f)
+            TempInstMut::call_with((interface, self), f)
         }
 
         fn try_parse_next(&mut self, interface: &mut IF) -> bool {
             let Some(parser) = &mut self.parser else {
                 return false;
             };
-            if BufferedParserInterface::with_temp_ref_pair(
-                interface,
-                &mut self.buffer,
-                |parser_interface| parser.parse(parser_interface),
-            ) {
+            if TempInstMut::call_with((interface, &mut self.buffer), |parser_interface| {
+                parser.parse(parser_interface)
+            }) {
                 self.parser = None;
             }
             true
@@ -741,16 +742,12 @@ pub mod buffer {
         pub(crate) fn finish(&mut self, interface: &mut IF) {
             self.buffer.0.clear();
             if let Some(parser) = &mut self.parser {
-                BufferedParserInterface::with_temp_ref_pair(
-                    interface,
-                    &mut self.buffer,
-                    |parser_interface| {
-                        while !parser.parse(parser_interface) {
-                            let buffer = parser_interface.get_refs_mut().1;
-                            buffer.0.clear();
-                        }
-                    },
-                );
+                TempInstMut::call_with((interface, &mut self.buffer), |parser_interface| {
+                    while !parser.parse(parser_interface) {
+                        let buffer = parser_interface.buffer.get_mut();
+                        buffer.0.clear();
+                    }
+                });
                 self.parser = None;
             }
         }
@@ -779,7 +776,11 @@ pub mod buffer {
         }
     }
 
-    pub type ParserOutputIter<IF, Out, P> = TempRefPair<IF, BufferedParser<IF, Out, P>>;
+    #[derive(TempRepr, TempReprMut, TempReprMutChk)]
+    pub struct ParserOutputIter<IF: ParserInterfaceBase, Out, P> {
+        pub(crate) interface: TempRefMut<IF>,
+        pub(crate) buffered_parser: TempRefMut<BufferedParser<IF, Out, P>>,
+    }
 
     impl<
             Config1,
@@ -792,7 +793,8 @@ pub mod buffer {
         type Item = WithSpan<Out, IF::Pos>;
 
         fn next(&mut self) -> Option<Self::Item> {
-            let (interface, bp) = self.get_refs_mut();
+            let interface = self.interface.get_mut();
+            let bp = self.buffered_parser.get_mut();
             loop {
                 let item = bp.buffer.0.pop_front();
                 if item.is_some() {
@@ -827,11 +829,10 @@ pub mod buffer {
         type Pos = IF::Pos;
 
         fn pos(&mut self) -> Self::Pos {
-            let (interface, bp) = self.get_refs_mut();
-            if let Some(item) = bp.buffer.0.front() {
+            if let Some(item) = self.buffered_parser.buffer.0.front() {
                 item.span.start.clone()
             } else {
-                interface.input().pos()
+                self.interface.input().pos()
             }
         }
     }
@@ -911,7 +912,8 @@ pub mod buffer {
             &mut self,
             pred: impl FnOnce(&Self::In) -> bool,
         ) -> Option<WithSpan<Self::In, Self::Pos>> {
-            let (interface, bp) = self.get_refs_mut();
+            let interface = self.interface.get_mut();
+            let bp = self.buffered_parser.get_mut();
             loop {
                 if let Some(item) = bp.buffer.0.front() {
                     if pred(item) {
@@ -927,8 +929,7 @@ pub mod buffer {
         }
 
         fn return_item(&mut self, item: WithSpan<Self::In, Self::Pos>) {
-            let (_, bp) = self.get_refs_mut();
-            bp.buffer.0.push_front(item);
+            self.buffered_parser.buffer.0.push_front(item);
         }
 
         fn consume_items(
@@ -939,7 +940,8 @@ pub mod buffer {
         }
 
         fn peek<R>(&mut self, f: impl FnOnce(&Self::In) -> R) -> Option<R> {
-            let (interface, bp) = self.get_refs_mut();
+            let interface = self.interface.get_mut();
+            let bp = self.buffered_parser.get_mut();
             loop {
                 if let Some(item) = bp.buffer.0.front() {
                     return Some(f(item));
@@ -951,7 +953,8 @@ pub mod buffer {
         }
 
         fn iterate<R>(&mut self, mut f: impl FnMut(&Self::In) -> Option<R>) -> Option<R> {
-            let (interface, bp) = self.get_refs_mut();
+            let interface = self.interface.get_mut();
+            let bp = self.buffered_parser.get_mut();
             let mut pos = 0;
             loop {
                 let mut iter = bp.buffer.0.iter().skip(pos);
@@ -1048,6 +1051,8 @@ pub mod buffer {
 pub mod compose {
     use std::collections::VecDeque;
 
+    use temp_inst::TempReprMut;
+
     use super::{buffer::*, *};
 
     impl<Config1, Config2, IF: ParserInterfaceBase<Config = (Config1, Config2)>, Mid, P1>
@@ -1057,11 +1062,11 @@ pub mod compose {
         type Config = (Config1, Config2);
 
         fn config(&self) -> &Self::Config {
-            self.get_refs().0.config()
+            self.interface.config()
         }
 
         fn modify_config<R>(&mut self, f: impl FnOnce(&mut Self::Config) -> R) -> R {
-            self.get_refs_mut().0.modify_config(f)
+            self.interface.get_mut().modify_config(f)
         }
     }
 
@@ -1083,7 +1088,7 @@ pub mod compose {
         }
 
         fn diagnostics(&mut self) -> &mut Self::Diag {
-            self.get_refs_mut().0.diagnostics()
+            self.interface.get_mut().diagnostics()
         }
     }
 
@@ -1095,7 +1100,7 @@ pub mod compose {
         type Output = IF::Output;
 
         fn output(&mut self) -> &mut Self::Output {
-            self.get_refs_mut().0.output()
+            self.interface.get_mut().output()
         }
     }
 
