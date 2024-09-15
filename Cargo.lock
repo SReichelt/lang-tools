@@ -48,6 +48,7 @@ name = "lang-def"
 version = "0.1.0"
 dependencies = [
  "compact_str",
+ "lang-def-derive",
  "nonminmax",
  "smallvec",
  "temp-inst",
@@ -130,7 +131,7 @@ dependencies = [
 [[package]]
 name = "temp-inst"
 version = "1.0.0"
-source = "git+https://github.com/SReichelt/temp-inst.git#4a39d609ce5357dd70dd357be3b17895c34ed7b6"
+source = "git+https://github.com/SReichelt/temp-inst.git#c4ee9b0aeb4f704880ceba7c3ba01cc9c36b4294"
 dependencies = [
  "either",
  "temp-inst-derive",
@@ -139,7 +140,7 @@ dependencies = [
 [[package]]
 name = "temp-inst-derive"
 version = "1.0.0"
-source = "git+https://github.com/SReichelt/temp-inst.git#4a39d609ce5357dd70dd357be3b17895c34ed7b6"
+source = "git+https://github.com/SReichelt/temp-inst.git#c4ee9b0aeb4f704880ceba7c3ba01cc9c36b4294"
 dependencies = [
  "proc-macro2",
  "quote",

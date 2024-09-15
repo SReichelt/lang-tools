@@ -3,6 +3,8 @@ use std::{borrow::Cow, collections::VecDeque, fmt::Debug, ops::Range};
 use compact_str::CompactString;
 use smallvec::SmallVec;
 
+pub use lang_def_derive::MemSerializable;
+
 pub trait MemSerializable<Pos> {
     type Serialized: Clone + PartialEq + Debug + 'static;
 

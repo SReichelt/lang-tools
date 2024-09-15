@@ -1,3 +1,3 @@
 [workspace]
-members = ["lang_def", "lang_def_derive", "lang_test"]
+members = ["lang-def", "lang-def-derive", "lang-test"]
 resolver = "2"

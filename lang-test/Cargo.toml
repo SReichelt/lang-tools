@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-lang-def = { path = "../lang_def" }
+lang-def = { path = "../lang-def" }

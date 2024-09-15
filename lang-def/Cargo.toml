@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+lang-def-derive = { path = "../lang-def-derive" }
 temp-inst = { git = "https://github.com/SReichelt/temp-inst.git", features = [
     "derive",
 ] }
