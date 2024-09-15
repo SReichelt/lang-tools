@@ -285,7 +285,7 @@ pub fn print_parser_output<'a, Desc: CharParserDesc<Out<'a, StrPosition>: Debug>
     config: Desc::Config<'a>,
 ) {
     let fragments = construct_parser_output::<Desc>(input, config);
-    println!("{fragments:?}");
+    println!("{fragments:#?}");
 }
 
 mod internal {
