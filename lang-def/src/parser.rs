@@ -289,7 +289,11 @@ impl<T, Pos: Position> Spanned for &WithSpan<T, Pos> {
 
 impl<T: Debug, Pos: Position> Debug for WithSpan<T, Pos> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_fmt(format_args!("{:?} [{:?}]", self.inner, self.span))
+        self.inner.fmt(f)?;
+        f.write_str(" [")?;
+        self.span.fmt(f)?;
+        f.write_str("]")?;
+        Ok(())
     }
 }
 
