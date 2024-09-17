@@ -131,7 +131,7 @@ dependencies = [
 [[package]]
 name = "temp-inst"
 version = "1.0.0"
-source = "git+https://github.com/SReichelt/temp-inst.git#c4ee9b0aeb4f704880ceba7c3ba01cc9c36b4294"
+source = "git+https://github.com/SReichelt/temp-inst.git#eef1bff82ffce6d351e4ffc0498f95ff04c18bfa"
 dependencies = [
  "either",
  "temp-inst-derive",
@@ -139,8 +139,8 @@ dependencies = [
 
 [[package]]
 name = "temp-inst-derive"
-version = "1.0.0"
-source = "git+https://github.com/SReichelt/temp-inst.git#c4ee9b0aeb4f704880ceba7c3ba01cc9c36b4294"
+version = "1.0.1"
+source = "git+https://github.com/SReichelt/temp-inst.git#eef1bff82ffce6d351e4ffc0498f95ff04c18bfa"
 dependencies = [
  "proc-macro2",
  "quote",
