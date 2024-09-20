@@ -470,21 +470,32 @@ pub enum SpanDesc {
     Keyword,
     Number,
     String,
-    VarDef(VarScopeDesc),
-    VarRef(VarScopeDesc),
+    NameDef(NameScopeDesc, Option<NameKindDesc>),
+    NameRef(NameScopeDesc, Option<NameKindDesc>),
 }
 
 impl_mem_serializable_self!(SpanDesc);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum VarScopeDesc {
+pub enum NameScopeDesc {
     Global,
-    Instance,
-    Field,
+    Instance, // corresponds to VSCode "enumMember"
+    Field,    // corresponds to VSCode "property"
+    Param,
     Local,
 }
 
-impl_mem_serializable_self!(VarScopeDesc);
+impl_mem_serializable_self!(NameScopeDesc);
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum NameKindDesc {
+    Value,
+    Function,
+    Type,
+    GenericType,
+}
+
+impl_mem_serializable_self!(NameKindDesc);
 
 pub mod helpers {
     use std::mem::take;
