@@ -461,7 +461,7 @@ mod internal {
                     return;
                 }
             }
-            panic!("unexpected output {out:?} for {s:?}, expected any of {expected_outputs:?}");
+            panic!("unexpected output {out:#?}\nfor {s:?},\nexpected any of {expected_outputs:#?}");
         }
     }
 
@@ -478,7 +478,9 @@ mod internal {
                     return;
                 }
             }
-            panic!("unexpected diagnostic {diag:?} for {s:?}, expected any of {expected_diags:?}");
+            panic!(
+                "unexpected diagnostic\n{diag:#?}\nfor {s:?},\nexpected any of {expected_diags:#?}"
+            );
         }
 
         fn span_desc(&mut self, span: impl Spanned<Pos = Self::Pos>, desc: SpanDesc) {
@@ -491,7 +493,7 @@ mod internal {
                     return;
                 }
             }
-            panic!("unexpected span description {desc:?} for {s:?}, expected any of {expected_descs:?}");
+            panic!("unexpected span description\n{desc:#?}\nfor {s:?},\nexpected any of {expected_descs:#?}");
         }
     }
 
