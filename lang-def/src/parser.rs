@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     fmt::{self, Debug, Display},
     iter::FusedIterator,
-    ops::{Deref, Range},
+    ops::{Deref, DerefMut, Range},
 };
 
 use crate::{impl_mem_serializable_self, mem_serializable::MemSerializable};
@@ -275,9 +275,21 @@ impl<T, Pos: Position> Deref for WithSpan<T, Pos> {
     }
 }
 
+impl<T, Pos: Position> DerefMut for WithSpan<T, Pos> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
 impl<T, Pos: Position> AsRef<T> for WithSpan<T, Pos> {
     fn as_ref(&self) -> &T {
         &self.inner
+    }
+}
+
+impl<T, Pos: Position> AsMut<T> for WithSpan<T, Pos> {
+    fn as_mut(&mut self) -> &mut T {
+        &mut self.inner
     }
 }
 
