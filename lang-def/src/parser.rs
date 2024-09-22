@@ -220,6 +220,8 @@ impl<
 
 pub trait Position: Clone + PartialEq + Debug + MemSerializable<Self> + 'static {}
 
+impl Position for () {}
+
 pub trait Spanned {
     type Pos: Position;
 
