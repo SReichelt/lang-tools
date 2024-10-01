@@ -62,9 +62,9 @@ impl DiagsSpec {
         DiagsSpec {
             diag_color,
             indicator: '!',
-            squiggle: '~',
-            cont_end: '>',
-            cont_start: '>',
+            squiggle: '^',
+            cont_end: '⁻',
+            cont_start: '⁻',
             msg_color,
         }
     }
@@ -505,7 +505,7 @@ mod tests {
         print!("{result}");
         assert_eq!(
             result,
-            "\u{1b}[0m\u{1b}[31ma\u{1b}[0m ∆ \u{1b}[0m\u{1b}[31mb\u{1b}[0m \n  \u{1b}[0m\u{1b}[1m\u{1b}[31m~\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `∆`\n     \u{1b}[0m\u{1b}[1m\u{1b}[33m~>\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 3\n\u{1b}[0m    \u{1b}[0m\u{1b}[31mc\u{1b}[0m    \u{1b}[0m\u{1b}[31mde\u{1b}[0m\n\u{1b}[0m\u{1b}[1m\u{1b}[33m>~~~\u{1b}[0m\n     \u{1b}[0m\u{1b}[1m\u{1b}[33m~~~~\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 2\n           \u{1b}[0m\u{1b}[1m\u{1b}[33m>\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 7\n\u{1b}[0m    \n\u{1b}[0m\u{1b}[1m\u{1b}[33m>~~~>\u{1b}[0m\n\u{1b}[0m   \n\u{1b}[0m\u{1b}[1m\u{1b}[33m>~~~\u{1b}[0m\n\u{1b}[0m\u{1b}[0m\u{1b}[31mf\n\u{1b}[0m"
+            "\u{1b}[0m\u{1b}[31ma\u{1b}[0m ∆ \u{1b}[0m\u{1b}[31mb\u{1b}[0m \n  \u{1b}[0m\u{1b}[1m\u{1b}[31m^\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `∆`\n     \u{1b}[0m\u{1b}[1m\u{1b}[33m^⁻\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 3\n\u{1b}[0m    \u{1b}[0m\u{1b}[31mc\u{1b}[0m    \u{1b}[0m\u{1b}[31mde\u{1b}[0m\n\u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^\u{1b}[0m\n     \u{1b}[0m\u{1b}[1m\u{1b}[33m^^^^\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 2\n           \u{1b}[0m\u{1b}[1m\u{1b}[33m⁻\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 7\n\u{1b}[0m    \n\u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^⁻\u{1b}[0m\n\u{1b}[0m   \n\u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^\u{1b}[0m\n\u{1b}[0m\u{1b}[0m\u{1b}[31mf\n\u{1b}[0m"
         );
         Ok(())
     }
@@ -524,7 +524,7 @@ mod tests {
         print!("{result}");
         assert_eq!(
             result,
-            "\u{1b}[0m\u{1b}[2m1 ┆ \u{1b}[0m\u{1b}[31ma\u{1b}[0m ∆ \u{1b}[0m\u{1b}[31mb\u{1b}[0m \n\u{1b}[0m\u{1b}[1m\u{1b}[31m!\u{1b}[0m\u{1b}[2m ┆   \u{1b}[0m\u{1b}[1m\u{1b}[31m~\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `∆`\n\u{1b}[0m\u{1b}[1m\u{1b}[33m!\u{1b}[0m\u{1b}[2m ┆      \u{1b}[0m\u{1b}[1m\u{1b}[33m~>\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 3\n\u{1b}[0m\u{1b}[2m2 ┆ \u{1b}[0m    \u{1b}[0m\u{1b}[31mc\u{1b}[0m    \u{1b}[0m\u{1b}[31mde\u{1b}[0m\n\u{1b}[0m\u{1b}[2m  ┆ \u{1b}[0m\u{1b}[1m\u{1b}[33m>~~~\u{1b}[0m\n\u{1b}[0m\u{1b}[1m\u{1b}[33m!\u{1b}[0m\u{1b}[2m ┆      \u{1b}[0m\u{1b}[1m\u{1b}[33m~~~~\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 2\n\u{1b}[0m\u{1b}[1m\u{1b}[33m!\u{1b}[0m\u{1b}[2m ┆            \u{1b}[0m\u{1b}[1m\u{1b}[33m>\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 7\n\u{1b}[0m\u{1b}[2m3 ┆ \u{1b}[0m    \n\u{1b}[0m\u{1b}[2m  ┆ \u{1b}[0m\u{1b}[1m\u{1b}[33m>~~~>\u{1b}[0m\n\u{1b}[0m\u{1b}[2m4 ┆ \u{1b}[0m   \n\u{1b}[0m\u{1b}[2m  ┆ \u{1b}[0m\u{1b}[1m\u{1b}[33m>~~~\u{1b}[0m\n\u{1b}[0m\u{1b}[2m5 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mf\n\u{1b}[0m"
+            "\u{1b}[0m\u{1b}[2m1 ┆ \u{1b}[0m\u{1b}[31ma\u{1b}[0m ∆ \u{1b}[0m\u{1b}[31mb\u{1b}[0m \n\u{1b}[0m\u{1b}[1m\u{1b}[31m!\u{1b}[0m\u{1b}[2m ┆   \u{1b}[0m\u{1b}[1m\u{1b}[31m^\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `∆`\n\u{1b}[0m\u{1b}[1m\u{1b}[33m!\u{1b}[0m\u{1b}[2m ┆      \u{1b}[0m\u{1b}[1m\u{1b}[33m^⁻\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 3\n\u{1b}[0m\u{1b}[2m2 ┆ \u{1b}[0m    \u{1b}[0m\u{1b}[31mc\u{1b}[0m    \u{1b}[0m\u{1b}[31mde\u{1b}[0m\n\u{1b}[0m\u{1b}[2m  ┆ \u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^\u{1b}[0m\n\u{1b}[0m\u{1b}[1m\u{1b}[33m!\u{1b}[0m\u{1b}[2m ┆      \u{1b}[0m\u{1b}[1m\u{1b}[33m^^^^\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 2\n\u{1b}[0m\u{1b}[1m\u{1b}[33m!\u{1b}[0m\u{1b}[2m ┆            \u{1b}[0m\u{1b}[1m\u{1b}[33m⁻\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 7\n\u{1b}[0m\u{1b}[2m3 ┆ \u{1b}[0m    \n\u{1b}[0m\u{1b}[2m  ┆ \u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^⁻\u{1b}[0m\n\u{1b}[0m\u{1b}[2m4 ┆ \u{1b}[0m   \n\u{1b}[0m\u{1b}[2m  ┆ \u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^\u{1b}[0m\n\u{1b}[0m\u{1b}[2m5 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mf\n\u{1b}[0m"
         );
         Ok(())
     }
@@ -543,7 +543,7 @@ mod tests {
         print!("{result}");
         assert_eq!(
             result,
-            "\u{1b}[0m\u{1b}[2m1 ┆ \u{1b}[0m\u{1b}[31ma\u{1b}[0m\n\u{1b}[0m\u{1b}[2m2 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mb\u{1b}[0m\n\u{1b}[0m\u{1b}[2m3 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mc\u{1b}[0m\n\u{1b}[0m\u{1b}[2m4 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31md\u{1b}[0m\n\u{1b}[0m\u{1b}[2m5 ┆ \u{1b}[0më\n\u{1b}[0m\u{1b}[1m\u{1b}[31m!\u{1b}[0m\u{1b}[2m ┆ \u{1b}[0m\u{1b}[1m\u{1b}[31m~\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `ë`\n\u{1b}[0m\u{1b}[2m6 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mf\u{1b}[0m\n\u{1b}[0m\u{1b}[2m7 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mg\u{1b}[0m\n\u{1b}[0m\u{1b}[2m8 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mh\u{1b}[0m\n\u{1b}[0m\u{1b}[2m9 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mi\u{1b}[0m\n\u{1b}[0m"
+            "\u{1b}[0m\u{1b}[2m1 ┆ \u{1b}[0m\u{1b}[31ma\u{1b}[0m\n\u{1b}[0m\u{1b}[2m2 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mb\u{1b}[0m\n\u{1b}[0m\u{1b}[2m3 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mc\u{1b}[0m\n\u{1b}[0m\u{1b}[2m4 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31md\u{1b}[0m\n\u{1b}[0m\u{1b}[2m5 ┆ \u{1b}[0më\n\u{1b}[0m\u{1b}[1m\u{1b}[31m!\u{1b}[0m\u{1b}[2m ┆ \u{1b}[0m\u{1b}[1m\u{1b}[31m^\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `ë`\n\u{1b}[0m\u{1b}[2m6 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mf\u{1b}[0m\n\u{1b}[0m\u{1b}[2m7 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mg\u{1b}[0m\n\u{1b}[0m\u{1b}[2m8 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mh\u{1b}[0m\n\u{1b}[0m\u{1b}[2m9 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mi\u{1b}[0m\n\u{1b}[0m"
         );
         Ok(())
     }
@@ -562,7 +562,7 @@ mod tests {
         print!("{result}");
         assert_eq!(
             result,
-            "\u{1b}[0m\u{1b}[2m 1 ┆ \u{1b}[0m\u{1b}[31ma\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 2 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mb\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 3 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mc\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 4 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31md\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 5 ┆ \u{1b}[0më\n\u{1b}[0m\u{1b}[1m\u{1b}[31m!!\u{1b}[0m\u{1b}[2m ┆ \u{1b}[0m\u{1b}[1m\u{1b}[31m~\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `ë`\n\u{1b}[0m\u{1b}[2m 6 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mf\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 7 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mg\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 8 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mh\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 9 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mi\u{1b}[0m\n\u{1b}[0m\u{1b}[2m10 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mj\u{1b}[0m\n\u{1b}[0m"
+            "\u{1b}[0m\u{1b}[2m 1 ┆ \u{1b}[0m\u{1b}[31ma\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 2 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mb\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 3 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mc\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 4 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31md\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 5 ┆ \u{1b}[0më\n\u{1b}[0m\u{1b}[1m\u{1b}[31m!!\u{1b}[0m\u{1b}[2m ┆ \u{1b}[0m\u{1b}[1m\u{1b}[31m^\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `ë`\n\u{1b}[0m\u{1b}[2m 6 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mf\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 7 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mg\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 8 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mh\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 9 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mi\u{1b}[0m\n\u{1b}[0m\u{1b}[2m10 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mj\u{1b}[0m\n\u{1b}[0m"
         );
         Ok(())
     }
