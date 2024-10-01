@@ -421,6 +421,7 @@ impl<Pos: Position> DiagnosticMessage<Pos> {
 #[non_exhaustive]
 pub enum SpanDesc {
     ParenStart, // Must always be matched by `ParenEnd` later.
+    ParenMid,
     ParenEnd,
     Comment,
     Keyword,

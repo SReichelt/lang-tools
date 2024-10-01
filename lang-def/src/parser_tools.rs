@@ -47,7 +47,11 @@ pub fn flatten_span_descs<Pos: Position>(
         let Some(next) = next else { break };
 
         // Special treatment of parentheses: do not output them if they are part of another span.
-        if !current_descs.is_empty() && matches!(**next, SpanDesc::ParenStart | SpanDesc::ParenEnd)
+        if !current_descs.is_empty()
+            && matches!(
+                **next,
+                SpanDesc::ParenStart | SpanDesc::ParenMid | SpanDesc::ParenEnd
+            )
         {
             continue;
         }

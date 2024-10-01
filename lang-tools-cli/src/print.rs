@@ -278,6 +278,7 @@ pub fn pretty_print<'a, Lang: LanguageDefinition, W: WriteColor>(
                     paren_level += 1;
                     color_spec
                 }
+                SpanDesc::ParenMid => style.parens(paren_level - 1),
                 SpanDesc::ParenEnd => {
                     paren_level -= 1;
                     style.parens(paren_level)
