@@ -1,0 +1,8 @@
+[package]
+name = "lang-tools-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lang-def = { path = "../lang-def" }
+termcolor = "1.4.1"

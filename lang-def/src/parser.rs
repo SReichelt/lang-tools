@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    cmp::Ordering,
     fmt::{self, Debug, Display},
     iter::FusedIterator,
     ops::{Deref, DerefMut, Range},
@@ -143,84 +144,17 @@ pub trait ParserInterface: ParserInputInterface + ParserOutputInterface {
     }
 }
 
-pub struct StandardParserInterface<Input, Output, Diag, Config> {
-    pub input: Input,
-    pub output: Output,
-    pub diag: Diag,
-    pub config: Config,
-}
-
-impl<Pos: Position, Input, Output, Diag: ParserDiagnostics<Pos = Pos>, Config> ParserInterfaceBase
-    for StandardParserInterface<Input, Output, Diag, Config>
-{
-    type Config = Config;
-    type Pos = Pos;
-
-    fn config(&self) -> &Self::Config {
-        &self.config
-    }
-
-    fn modify_config<R>(&mut self, f: impl FnOnce(&mut Self::Config) -> R) -> R {
-        f(&mut self.config)
-    }
-}
-
-impl<
-        In,
-        Pos: Position,
-        Input: ParserInput<In = In, Pos = Pos>,
-        Output,
-        Diag: ParserDiagnostics<Pos = Pos>,
-        Config,
-    > ParserInputInterface for StandardParserInterface<Input, Output, Diag, Config>
-{
-    type In = In;
-
-    type Input = Input;
-    type Diag = Diag;
-
-    fn input(&mut self) -> &mut Self::Input {
-        &mut self.input
-    }
-
-    fn diagnostics(&mut self) -> &mut Self::Diag {
-        &mut self.diag
-    }
-}
-
-impl<
-        Out,
-        Pos: Position,
-        Input,
-        Output: ParserOutput<Out = Out, Pos = Pos>,
-        Diag: ParserDiagnostics<Pos = Pos>,
-        Config,
-    > ParserOutputInterface for StandardParserInterface<Input, Output, Diag, Config>
-{
-    type Out = Out;
-
-    type Output = Output;
-
-    fn output(&mut self) -> &mut Self::Output {
-        &mut self.output
-    }
-}
-
-impl<
-        In,
-        Out,
-        Pos: Position,
-        Input: ParserInput<In = In, Pos = Pos>,
-        Output: ParserOutput<Out = Out, Pos = Pos>,
-        Diag: ParserDiagnostics<Pos = Pos>,
-        Config,
-    > ParserInterface for StandardParserInterface<Input, Output, Diag, Config>
-{
-}
-
-pub trait Position: Clone + PartialEq + Debug + MemSerializable<Self> + 'static {}
+pub trait Position: Clone + Default + Eq + Ord + Debug + MemSerializable<Self> + 'static {}
 
 impl Position for () {}
+
+pub fn cmp_spans<Pos: Position>(l: &Range<Pos>, r: &Range<Pos>) -> Ordering {
+    let start_order = l.start.cmp(&r.start);
+    if start_order != Ordering::Equal {
+        return start_order;
+    }
+    r.end.cmp(&l.end)
+}
 
 pub trait Spanned {
     type Pos: Position;
@@ -244,7 +178,7 @@ impl<T: Spanned> Spanned for Range<T> {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct WithSpan<T, Pos: Position> {
     inner: T,
     span: Range<Pos>,
@@ -264,6 +198,10 @@ impl<T, Pos: Position> WithSpan<T, Pos> {
 
     pub fn as_ref(&self) -> WithSpan<&T, Pos> {
         WithSpan::new(&self.inner, self)
+    }
+
+    pub fn sort_by_spans(items: &mut [Self]) {
+        items.sort_by(|l, r| cmp_spans(&l.span, &r.span))
     }
 }
 
@@ -423,7 +361,7 @@ pub trait ParserDiagnostics {
     fn span_desc(&mut self, span: impl Spanned<Pos = Self::Pos>, desc: SpanDesc);
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Diagnostic<Pos: Position> {
     pub severity: DiagnosticSeverity,
     pub message: DiagnosticMessage<Pos>,
@@ -438,14 +376,16 @@ impl<Pos: Position> Diagnostic<Pos> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum DiagnosticSeverity {
     Error(Option<ErrorKind>),
     Warning(Option<WarningKind>),
     Info,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum ErrorKind {
     SyntaxError,
     ResourceNotFound,
@@ -453,7 +393,8 @@ pub enum ErrorKind {
     TypeMismatch,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum WarningKind {
     SyntaxWarning,
     UnusedObject,
@@ -461,7 +402,7 @@ pub enum WarningKind {
     Deprecated,
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DiagnosticMessage<Pos: Position> {
     pub msg: String,
     pub hints: Vec<WithSpan<DiagnosticMessage<Pos>, Pos>>,
@@ -476,7 +417,8 @@ impl<Pos: Position> DiagnosticMessage<Pos> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum SpanDesc {
     ParenStart, // Must always be matched by `ParenEnd` later.
     ParenEnd,
@@ -490,7 +432,8 @@ pub enum SpanDesc {
 
 impl_mem_serializable_self!(SpanDesc);
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum NameScopeDesc {
     Global,
     Instance, // corresponds to VSCode "enumMember"
@@ -501,7 +444,8 @@ pub enum NameScopeDesc {
 
 impl_mem_serializable_self!(NameScopeDesc);
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum NameKindDesc {
     Value,
     Function,
@@ -1253,6 +1197,12 @@ pub mod str {
         }
     }
 
+    impl Default for StrPosition {
+        fn default() -> Self {
+            StrPosition::from_usize(0)
+        }
+    }
+
     impl Debug for StrPosition {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             Debug::fmt(&self.to_usize(), f)
@@ -1430,21 +1380,96 @@ pub mod str {
     }
 }
 
-pub mod testing {
+pub mod impls {
     use super::*;
 
-    #[derive(Clone, PartialEq, Debug)]
-    pub struct TestOutput<Out, Pos: Position> {
-        pub output: Vec<WithSpan<Out, Pos>>,
+    pub struct StandardParserInterface<Input, Output, Diag, Config> {
+        pub input: Input,
+        pub output: Output,
+        pub diag: Diag,
+        pub config: Config,
     }
 
-    impl<Out, Pos: Position> TestOutput<Out, Pos> {
-        pub fn new() -> Self {
-            TestOutput { output: Vec::new() }
+    impl<Pos: Position, Input, Output, Diag: ParserDiagnostics<Pos = Pos>, Config>
+        ParserInterfaceBase for StandardParserInterface<Input, Output, Diag, Config>
+    {
+        type Config = Config;
+        type Pos = Pos;
+
+        fn config(&self) -> &Self::Config {
+            &self.config
+        }
+
+        fn modify_config<R>(&mut self, f: impl FnOnce(&mut Self::Config) -> R) -> R {
+            f(&mut self.config)
         }
     }
 
-    impl<Out, Pos: Position> ParserOutput for TestOutput<Out, Pos> {
+    impl<
+            In,
+            Pos: Position,
+            Input: ParserInput<In = In, Pos = Pos>,
+            Output,
+            Diag: ParserDiagnostics<Pos = Pos>,
+            Config,
+        > ParserInputInterface for StandardParserInterface<Input, Output, Diag, Config>
+    {
+        type In = In;
+
+        type Input = Input;
+        type Diag = Diag;
+
+        fn input(&mut self) -> &mut Self::Input {
+            &mut self.input
+        }
+
+        fn diagnostics(&mut self) -> &mut Self::Diag {
+            &mut self.diag
+        }
+    }
+
+    impl<
+            Out,
+            Pos: Position,
+            Input,
+            Output: ParserOutput<Out = Out, Pos = Pos>,
+            Diag: ParserDiagnostics<Pos = Pos>,
+            Config,
+        > ParserOutputInterface for StandardParserInterface<Input, Output, Diag, Config>
+    {
+        type Out = Out;
+
+        type Output = Output;
+
+        fn output(&mut self) -> &mut Self::Output {
+            &mut self.output
+        }
+    }
+
+    impl<
+            In,
+            Out,
+            Pos: Position,
+            Input: ParserInput<In = In, Pos = Pos>,
+            Output: ParserOutput<Out = Out, Pos = Pos>,
+            Diag: ParserDiagnostics<Pos = Pos>,
+            Config,
+        > ParserInterface for StandardParserInterface<Input, Output, Diag, Config>
+    {
+    }
+
+    #[derive(Clone, PartialEq, Eq, Debug)]
+    pub struct VecOutput<Out, Pos: Position> {
+        pub output: Vec<WithSpan<Out, Pos>>,
+    }
+
+    impl<Out, Pos: Position> VecOutput<Out, Pos> {
+        pub fn new() -> Self {
+            VecOutput { output: Vec::new() }
+        }
+    }
+
+    impl<Out, Pos: Position> ParserOutput for VecOutput<Out, Pos> {
         type Out = Out;
         type Pos = Pos;
 
@@ -1453,21 +1478,21 @@ pub mod testing {
         }
     }
 
-    pub struct TestDiagnostics<Pos: Position> {
+    pub struct VecDiagnostics<Pos: Position> {
         pub diag: Vec<WithSpan<Diagnostic<Pos>, Pos>>,
         pub desc: Vec<WithSpan<SpanDesc, Pos>>,
     }
 
-    impl<Pos: Position> TestDiagnostics<Pos> {
+    impl<Pos: Position> VecDiagnostics<Pos> {
         pub fn new() -> Self {
-            TestDiagnostics {
+            VecDiagnostics {
                 diag: Vec::new(),
                 desc: Vec::new(),
             }
         }
     }
 
-    impl<Pos: Position> ParserDiagnostics for TestDiagnostics<Pos> {
+    impl<Pos: Position> ParserDiagnostics for VecDiagnostics<Pos> {
         type Pos = Pos;
 
         fn diag(&mut self, span: impl Spanned<Pos = Self::Pos>, diag: Diagnostic<Self::Pos>) {
@@ -1479,22 +1504,25 @@ pub mod testing {
         }
     }
 
+    pub type VecParserInterface<Input, Out, Config> = StandardParserInterface<
+        Input,
+        VecOutput<Out, <Input as ParserInput>::Pos>,
+        VecDiagnostics<<Input as ParserInput>::Pos>,
+        Config,
+    >;
+
     pub mod str {
         use super::{super::str::*, *};
 
-        pub type TestParserInterface<'a, Out, Config> = StandardParserInterface<
-            StrInput<'a>,
-            TestOutput<Out, StrPosition>,
-            TestDiagnostics<StrPosition>,
-            Config,
-        >;
+        pub type StrVecParserInterface<'a, Out, Config> =
+            VecParserInterface<StrInput<'a>, Out, Config>;
 
-        impl<'a, Out, Config> TestParserInterface<'a, Out, Config> {
+        impl<'a, Out, Config> StrVecParserInterface<'a, Out, Config> {
             pub fn new(input: &'a str, config: Config) -> Self {
-                TestParserInterface {
+                StrVecParserInterface {
                     input: StrInput::new(input),
-                    output: TestOutput::new(),
-                    diag: TestDiagnostics::new(),
+                    output: VecOutput::new(),
+                    diag: VecDiagnostics::new(),
                     config,
                 }
             }
@@ -1504,21 +1532,23 @@ pub mod testing {
             input: &'a str,
             config: Desc::Config<'a>,
         ) -> (
-            TestOutput<Desc::Out<'a, StrPosition>, StrPosition>,
-            TestDiagnostics<StrPosition>,
+            VecOutput<Desc::Out<'a, StrPosition>, StrPosition>,
+            VecDiagnostics<StrPosition>,
         ) {
-            let mut interface = TestParserInterface::new(input, config);
+            let mut interface = StrVecParserInterface::new(input, config);
             let mut parser = Desc::parser(&interface);
             while !parser.parse(&mut interface) {}
             (interface.output, interface.diag)
         }
     }
+}
 
+pub mod testing {
     /// Some simple example parsers for testing and demonstration purposes.
     pub mod test_parsers {
         use std::mem::replace;
 
-        use super::{compose::*, *};
+        use super::super::{compose::*, *};
 
         pub type Token<'a> = Cow<'a, str>;
 
@@ -1527,7 +1557,7 @@ pub mod testing {
         /// Non-ascii characters are reported as errors, and multiple consecutive whitespace
         /// characters are reported as warnings.
         /// This parser makes use of single-character lookahead.
-        #[derive(Clone, PartialEq, Debug)]
+        #[derive(Clone, PartialEq, Eq, Debug)]
         pub struct Tokenizer;
 
         impl Tokenizer {
@@ -1628,7 +1658,7 @@ pub mod testing {
         /// consecutive inputs (i.e. with overlap).
         /// If no tokens are present, an info is reported.
         /// This parser makes use of single-token lookahead.
-        #[derive(Clone, PartialEq)]
+        #[derive(Clone, PartialEq, Eq)]
         pub struct PairMaker<In, Pos: Position> {
             prev_token: Option<WithSpan<In, Pos>>,
         }
@@ -1714,7 +1744,7 @@ pub mod testing {
         /// A parser that inputs and outputs tokens, returning only those output tokens that do not
         /// have any longer tokens to their left or right.
         /// This parser makes conditional use of single-token lookahead.
-        #[derive(Clone, PartialEq, Debug)]
+        #[derive(Clone, PartialEq, Eq, Debug)]
         pub struct PeakFinder {
             prev_token_len: Option<usize>,
         }
@@ -1796,10 +1826,13 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
+    use impls::StandardParserInterface;
+
     use super::{
         buffer::*,
+        impls::{str::*, VecDiagnostics, VecOutput},
         str::*,
-        testing::{str::*, test_parsers::*, TestDiagnostics, TestOutput},
+        testing::test_parsers::*,
         *,
     };
 
@@ -1859,7 +1892,7 @@ mod tests {
         let mut interface = StandardParserInterface {
             input: StrInput::new("abc de  fghi j  kl"),
             output: (),
-            diag: TestDiagnostics::new(),
+            diag: VecDiagnostics::new(),
             config: ((), ()),
         };
         let mut tokenizer = BufferedParser::new(Tokenizer::new());
@@ -1917,7 +1950,7 @@ mod tests {
         let mut interface = StandardParserInterface {
             input: StrInput::new("abc de  fghi j  kl"),
             output: (),
-            diag: TestDiagnostics::new(),
+            diag: VecDiagnostics::new(),
             config: ((), ()),
         };
         let mut tokenizer = BufferedParser::new(Tokenizer::new());
@@ -2017,7 +2050,7 @@ mod tests {
         let mut interface = StandardParserInterface {
             input: StrInput::new("abc de  fghi j  kl"),
             output: (),
-            diag: TestDiagnostics::new(),
+            diag: VecDiagnostics::new(),
             config: ((), ()),
         };
         let mut tokenizer = BufferedParser::new(Tokenizer::new());
@@ -2203,7 +2236,7 @@ mod tests {
         assert_eq!(diag.desc, []);
     }
 
-    #[derive(Clone, PartialEq, Debug)]
+    #[derive(Clone, PartialEq, Eq, Debug)]
     struct ParserCacheSpan<State, Out> {
         len: usize,
         lookahead_len: usize,
@@ -2290,18 +2323,18 @@ mod tests {
             <Desc::Parser<
                 'a,
                 StrPosition,
-                TestParserInterface<'a, Desc::Out<'a, StrPosition>, Desc::Config<'a>>,
+                StrVecParserInterface<'a, Desc::Out<'a, StrPosition>, Desc::Config<'a>>,
             > as MemSerializable<StrPosition>>::Serialized,
             <WithSpan<Desc::Out<'a, StrPosition>, StrPosition> as MemSerializable<StrPosition>>::Serialized,
         >,
     ) -> (
-        TestOutput<Desc::Out<'a, StrPosition>, StrPosition>,
-        TestDiagnostics<StrPosition>,
+        VecOutput<Desc::Out<'a, StrPosition>, StrPosition>,
+        VecDiagnostics<StrPosition>,
         usize,
     ) {
         // TODO: A real implementation will need to remember which spans called `modify_config`.
         // TODO: Diagnostics need to be treated equivalently to output.
-        let mut interface = TestParserInterface::new(input, config);
+        let mut interface = StrVecParserInterface::new(input, config);
         let mut steps = 0;
 
         let mut cur_pos = 0;
@@ -2344,7 +2377,7 @@ mod tests {
             let mut parser: Desc::Parser<
                 'a,
                 StrPosition,
-                TestParserInterface<'a, Desc::Out<'a, StrPosition>, Desc::Config<'a>>,
+                StrVecParserInterface<'a, Desc::Out<'a, StrPosition>, Desc::Config<'a>>,
             >;
             if span_idx > 0 {
                 let span = &cache[span_idx - 1];

@@ -2,6 +2,7 @@ use parser::CharParserDesc;
 
 pub mod mem_serializable;
 pub mod parser;
+pub mod parser_tools;
 
 /// A trait that represents a (programming, markup, domain-specific, ...) language, for the purpose
 /// of implementing reusable tooling.

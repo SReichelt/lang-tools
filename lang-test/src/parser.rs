@@ -1,6 +1,6 @@
 use std::{cmp::min_by, fmt::Debug, iter::Peekable, ops::Range, slice};
 
-use lang_def::parser::{str::*, testing::str::*, *};
+use lang_def::parser::{impls::str::*, str::*, *};
 
 use internal::*;
 
@@ -152,9 +152,9 @@ pub fn construct_parser_output<'a, Desc: CharParserDesc>(
 
     let (mut output, mut diag) = parse_all::<Desc>(input, config);
 
-    sort_by_spans(&mut output.output);
-    sort_by_spans(&mut diag.diag);
-    sort_by_spans(&mut diag.desc);
+    WithSpan::sort_by_spans(&mut output.output);
+    WithSpan::sort_by_spans(&mut diag.diag);
+    WithSpan::sort_by_spans(&mut diag.desc);
 
     let mut fragments = Vec::new();
     let mut pos = StrPosition::from_usize(0);
@@ -289,7 +289,7 @@ pub fn print_parser_output<'a, Desc: CharParserDesc<Out<'a, StrPosition>: Debug>
 }
 
 mod internal {
-    use std::{borrow::Cow, cmp::Ordering, iter::FusedIterator, ops::Range};
+    use std::{borrow::Cow, iter::FusedIterator, ops::Range};
 
     use lang_def::parser::helpers::*;
 
@@ -699,18 +699,6 @@ mod internal {
                 "missing span description(s): {expected_descs:?}"
             );
         }
-    }
-
-    pub fn cmp_spans(l: &Range<StrPosition>, r: &Range<StrPosition>) -> Ordering {
-        let start_order = l.start.cmp(&r.start);
-        if start_order != Ordering::Equal {
-            return start_order;
-        }
-        r.end.cmp(&l.end)
-    }
-
-    pub fn sort_by_spans<T>(items: &mut [WithSpan<T, StrPosition>]) {
-        items.sort_by(|l, r| cmp_spans(&l.span(), &r.span()))
     }
 }
 
