@@ -47,6 +47,7 @@ impl LineNumbersSpec {
 pub struct DiagsSpec {
     pub diag_color: ColorSpec,
     pub indicator: char,
+    pub zero_size: char,
     pub squiggle: char,
     pub cont_end: char,
     pub cont_start: char,
@@ -62,6 +63,7 @@ impl DiagsSpec {
         DiagsSpec {
             diag_color,
             indicator: '!',
+            zero_size: '⸌',
             squiggle: '^',
             cont_end: '⁻',
             cont_start: '⁻',
@@ -98,14 +100,14 @@ impl StandardOutputStyle {
             errors: Some(DiagsSpec::standard(Color::Red)),
             warnings: Some(DiagsSpec::standard(Color::Yellow)),
             infos: Some(DiagsSpec::standard(Color::Blue)),
-            parens: vec![color(Color::Blue), color(Color::Green), color(Color::Red)],
+            parens: vec![color(Color::Blue), color(Color::Green), color(Color::Cyan)],
             comments,
             keywords: color(Color::Blue),
             numbers: color(Color::Red),
             strings: color(Color::Red),
             value_names: ColorSpec::new(),
             fn_names: color(Color::Magenta),
-            type_names: color(Color::Cyan),
+            type_names: color(Color::Ansi256(14)),
             scope_overrides: ScopeOverrides::standard(),
         }
     }
@@ -269,6 +271,10 @@ pub fn pretty_print<'a, Lang: LanguageDefinition, W: WriteColor>(
         None
     };
 
+    let mut error_count: usize = 0;
+    let mut warning_count: usize = 0;
+    let mut info_count: usize = 0;
+
     let mut paren_level = 0;
     let mut begin_desc = |span_desc: Option<&SpanDesc>| {
         if let Some(span_desc) = span_desc {
@@ -400,7 +406,7 @@ pub fn pretty_print<'a, Lang: LanguageDefinition, W: WriteColor>(
                 }
                 w.set_color(&diag_spec.diag_color)?;
                 if span.end <= span.start {
-                    write!(w, "{}", diag_spec.squiggle)?;
+                    write!(w, "{}", diag_spec.zero_size)?;
                 } else if span.end <= line_end {
                     let line_part = &line[(span.start - line_start)..(span.end - line_start)];
                     let line_part_chars = line_mgr.count_chars(line_part);
@@ -422,6 +428,12 @@ pub fn pretty_print<'a, Lang: LanguageDefinition, W: WriteColor>(
                 w.write_all(diag.message.msg.as_bytes())?;
                 write!(w, "\n")?;
                 // TODO: also show hints (configurably)
+                match diag.severity {
+                    DiagnosticSeverity::Error(_) => error_count += 1,
+                    DiagnosticSeverity::Warning(_) => warning_count += 1,
+                    DiagnosticSeverity::Info => info_count += 1,
+                    _ => {}
+                }
             }
             cur_diag = diag_iter.next();
         }
@@ -430,10 +442,38 @@ pub fn pretty_print<'a, Lang: LanguageDefinition, W: WriteColor>(
         line_idx += 1;
     }
 
+    w.reset()?;
     if !input.ends_with('\n') {
         write!(w, "\n")?;
     }
-    w.reset()
+
+    let mut msgs = Vec::new();
+    if error_count > 0 {
+        msgs.push(if error_count == 1 {
+            format!("{error_count} error")
+        } else {
+            format!("{error_count} errors")
+        });
+    }
+    if warning_count > 0 {
+        msgs.push(if warning_count == 1 {
+            format!("{warning_count} warning")
+        } else {
+            format!("{warning_count} warnings")
+        });
+    }
+    if info_count > 0 {
+        msgs.push(if info_count == 1 {
+            format!("{info_count} info")
+        } else {
+            format!("{info_count} infos")
+        });
+    }
+    if !msgs.is_empty() {
+        write!(w, "\n{}\n", msgs.join(", "))?;
+    }
+
+    Ok(())
 }
 
 struct LineMgr {
@@ -505,7 +545,7 @@ mod tests {
         print!("{result}");
         assert_eq!(
             result,
-            "\u{1b}[0m\u{1b}[31ma\u{1b}[0m ∆ \u{1b}[0m\u{1b}[31mb\u{1b}[0m \n  \u{1b}[0m\u{1b}[1m\u{1b}[31m^\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `∆`\n     \u{1b}[0m\u{1b}[1m\u{1b}[33m^⁻\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 3\n\u{1b}[0m    \u{1b}[0m\u{1b}[31mc\u{1b}[0m    \u{1b}[0m\u{1b}[31mde\u{1b}[0m\n\u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^\u{1b}[0m\n     \u{1b}[0m\u{1b}[1m\u{1b}[33m^^^^\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 2\n           \u{1b}[0m\u{1b}[1m\u{1b}[33m⁻\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 7\n\u{1b}[0m    \n\u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^⁻\u{1b}[0m\n\u{1b}[0m   \n\u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^\u{1b}[0m\n\u{1b}[0m\u{1b}[0m\u{1b}[31mf\n\u{1b}[0m"
+            "\u{1b}[0m\u{1b}[31ma\u{1b}[0m ∆ \u{1b}[0m\u{1b}[31mb\u{1b}[0m \n  \u{1b}[0m\u{1b}[1m\u{1b}[31m^\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `∆`\n     \u{1b}[0m\u{1b}[1m\u{1b}[33m^⁻\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 3\n\u{1b}[0m    \u{1b}[0m\u{1b}[31mc\u{1b}[0m    \u{1b}[0m\u{1b}[31mde\u{1b}[0m\n\u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^\u{1b}[0m\n     \u{1b}[0m\u{1b}[1m\u{1b}[33m^^^^\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 2\n           \u{1b}[0m\u{1b}[1m\u{1b}[33m⁻\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 7\n\u{1b}[0m    \n\u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^⁻\u{1b}[0m\n\u{1b}[0m   \n\u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^\u{1b}[0m\n\u{1b}[0m\u{1b}[0m\u{1b}[31mf\u{1b}[0m\n\n1 error, 3 warnings\n"
         );
         Ok(())
     }
@@ -524,7 +564,21 @@ mod tests {
         print!("{result}");
         assert_eq!(
             result,
-            "\u{1b}[0m\u{1b}[2m1 ┆ \u{1b}[0m\u{1b}[31ma\u{1b}[0m ∆ \u{1b}[0m\u{1b}[31mb\u{1b}[0m \n\u{1b}[0m\u{1b}[1m\u{1b}[31m!\u{1b}[0m\u{1b}[2m ┆   \u{1b}[0m\u{1b}[1m\u{1b}[31m^\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `∆`\n\u{1b}[0m\u{1b}[1m\u{1b}[33m!\u{1b}[0m\u{1b}[2m ┆      \u{1b}[0m\u{1b}[1m\u{1b}[33m^⁻\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 3\n\u{1b}[0m\u{1b}[2m2 ┆ \u{1b}[0m    \u{1b}[0m\u{1b}[31mc\u{1b}[0m    \u{1b}[0m\u{1b}[31mde\u{1b}[0m\n\u{1b}[0m\u{1b}[2m  ┆ \u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^\u{1b}[0m\n\u{1b}[0m\u{1b}[1m\u{1b}[33m!\u{1b}[0m\u{1b}[2m ┆      \u{1b}[0m\u{1b}[1m\u{1b}[33m^^^^\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 2\n\u{1b}[0m\u{1b}[1m\u{1b}[33m!\u{1b}[0m\u{1b}[2m ┆            \u{1b}[0m\u{1b}[1m\u{1b}[33m⁻\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 7\n\u{1b}[0m\u{1b}[2m3 ┆ \u{1b}[0m    \n\u{1b}[0m\u{1b}[2m  ┆ \u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^⁻\u{1b}[0m\n\u{1b}[0m\u{1b}[2m4 ┆ \u{1b}[0m   \n\u{1b}[0m\u{1b}[2m  ┆ \u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^\u{1b}[0m\n\u{1b}[0m\u{1b}[2m5 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mf\n\u{1b}[0m"
+            "\u{1b}[0m\u{1b}[2m1 ┆ \u{1b}[0m\u{1b}[31ma\u{1b}[0m ∆ \u{1b}[0m\u{1b}[31mb\u{1b}[0m \n\u{1b}[0m\u{1b}[1m\u{1b}[31m!\u{1b}[0m\u{1b}[2m ┆   \u{1b}[0m\u{1b}[1m\u{1b}[31m^\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `∆`\n\u{1b}[0m\u{1b}[1m\u{1b}[33m!\u{1b}[0m\u{1b}[2m ┆      \u{1b}[0m\u{1b}[1m\u{1b}[33m^⁻\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 3\n\u{1b}[0m\u{1b}[2m2 ┆ \u{1b}[0m    \u{1b}[0m\u{1b}[31mc\u{1b}[0m    \u{1b}[0m\u{1b}[31mde\u{1b}[0m\n\u{1b}[0m\u{1b}[2m  ┆ \u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^\u{1b}[0m\n\u{1b}[0m\u{1b}[1m\u{1b}[33m!\u{1b}[0m\u{1b}[2m ┆      \u{1b}[0m\u{1b}[1m\u{1b}[33m^^^^\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 2\n\u{1b}[0m\u{1b}[1m\u{1b}[33m!\u{1b}[0m\u{1b}[2m ┆            \u{1b}[0m\u{1b}[1m\u{1b}[33m⁻\u{1b}[0m \u{1b}[0m\u{1b}[1mexcessive whitespace length 7\n\u{1b}[0m\u{1b}[2m3 ┆ \u{1b}[0m    \n\u{1b}[0m\u{1b}[2m  ┆ \u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^⁻\u{1b}[0m\n\u{1b}[0m\u{1b}[2m4 ┆ \u{1b}[0m   \n\u{1b}[0m\u{1b}[2m  ┆ \u{1b}[0m\u{1b}[1m\u{1b}[33m⁻^^^\u{1b}[0m\n\u{1b}[0m\u{1b}[2m5 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mf\u{1b}[0m\n\n1 error, 3 warnings\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn newline_terminated_2() -> io::Result<()> {
+        let style = StandardOutputStyle::standard();
+        let mut buf = Ansi::new(Vec::new());
+        pretty_print::<TestLang, _>("a\nb\n", TokenizerConfig, &style, &mut buf)?;
+        let result = String::from_utf8(buf.into_inner()).unwrap();
+        print!("{result}");
+        assert_eq!(
+            result,
+            "\u{1b}[0m\u{1b}[2m1 ┆ \u{1b}[0m\u{1b}[31ma\u{1b}[0m\n\u{1b}[0m\u{1b}[2m2 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mb\u{1b}[0m\n\u{1b}[0m"
         );
         Ok(())
     }
@@ -543,7 +597,7 @@ mod tests {
         print!("{result}");
         assert_eq!(
             result,
-            "\u{1b}[0m\u{1b}[2m1 ┆ \u{1b}[0m\u{1b}[31ma\u{1b}[0m\n\u{1b}[0m\u{1b}[2m2 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mb\u{1b}[0m\n\u{1b}[0m\u{1b}[2m3 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mc\u{1b}[0m\n\u{1b}[0m\u{1b}[2m4 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31md\u{1b}[0m\n\u{1b}[0m\u{1b}[2m5 ┆ \u{1b}[0më\n\u{1b}[0m\u{1b}[1m\u{1b}[31m!\u{1b}[0m\u{1b}[2m ┆ \u{1b}[0m\u{1b}[1m\u{1b}[31m^\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `ë`\n\u{1b}[0m\u{1b}[2m6 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mf\u{1b}[0m\n\u{1b}[0m\u{1b}[2m7 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mg\u{1b}[0m\n\u{1b}[0m\u{1b}[2m8 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mh\u{1b}[0m\n\u{1b}[0m\u{1b}[2m9 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mi\u{1b}[0m\n\u{1b}[0m"
+            "\u{1b}[0m\u{1b}[2m1 ┆ \u{1b}[0m\u{1b}[31ma\u{1b}[0m\n\u{1b}[0m\u{1b}[2m2 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mb\u{1b}[0m\n\u{1b}[0m\u{1b}[2m3 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mc\u{1b}[0m\n\u{1b}[0m\u{1b}[2m4 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31md\u{1b}[0m\n\u{1b}[0m\u{1b}[2m5 ┆ \u{1b}[0më\n\u{1b}[0m\u{1b}[1m\u{1b}[31m!\u{1b}[0m\u{1b}[2m ┆ \u{1b}[0m\u{1b}[1m\u{1b}[31m^\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `ë`\n\u{1b}[0m\u{1b}[2m6 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mf\u{1b}[0m\n\u{1b}[0m\u{1b}[2m7 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mg\u{1b}[0m\n\u{1b}[0m\u{1b}[2m8 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mh\u{1b}[0m\n\u{1b}[0m\u{1b}[2m9 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mi\u{1b}[0m\n\u{1b}[0m\n1 error\n"
         );
         Ok(())
     }
@@ -562,7 +616,7 @@ mod tests {
         print!("{result}");
         assert_eq!(
             result,
-            "\u{1b}[0m\u{1b}[2m 1 ┆ \u{1b}[0m\u{1b}[31ma\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 2 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mb\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 3 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mc\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 4 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31md\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 5 ┆ \u{1b}[0më\n\u{1b}[0m\u{1b}[1m\u{1b}[31m!!\u{1b}[0m\u{1b}[2m ┆ \u{1b}[0m\u{1b}[1m\u{1b}[31m^\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `ë`\n\u{1b}[0m\u{1b}[2m 6 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mf\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 7 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mg\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 8 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mh\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 9 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mi\u{1b}[0m\n\u{1b}[0m\u{1b}[2m10 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mj\u{1b}[0m\n\u{1b}[0m"
+            "\u{1b}[0m\u{1b}[2m 1 ┆ \u{1b}[0m\u{1b}[31ma\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 2 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mb\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 3 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mc\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 4 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31md\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 5 ┆ \u{1b}[0më\n\u{1b}[0m\u{1b}[1m\u{1b}[31m!!\u{1b}[0m\u{1b}[2m ┆ \u{1b}[0m\u{1b}[1m\u{1b}[31m^\u{1b}[0m \u{1b}[0m\u{1b}[1munexpected non-ascii character `ë`\n\u{1b}[0m\u{1b}[2m 6 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mf\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 7 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mg\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 8 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mh\u{1b}[0m\n\u{1b}[0m\u{1b}[2m 9 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mi\u{1b}[0m\n\u{1b}[0m\u{1b}[2m10 ┆ \u{1b}[0m\u{1b}[0m\u{1b}[31mj\u{1b}[0m\n\u{1b}[0m\n1 error\n"
         );
         Ok(())
     }
